@@ -1,19 +1,13 @@
 /** @type {import('next').NextConfig} */
+const withPWA = require("@ducanh2912/next-pwa").default({
+  dest: "public",
+  cacheOnFrontEndNav: true,
+  aggressiveFrontEndNavCaching: true,
+  disable: process.env.NODE_ENV === "development",
+});
 
-const isProd = process.env.NODE_ENV === "production";
-
-let nextConfig = {
+const nextConfig = {
   reactStrictMode: true,
 };
 
-// Only wrap with PWA in production to avoid build issues
-if (isProd) {
-  const withPWA = require("next-pwa")({
-    dest: "public",
-    register: true,
-    skipWaiting: true,
-  });
-  nextConfig = withPWA(nextConfig);
-}
-
-module.exports = nextConfig;
+module.exports = withPWA(nextConfig);
