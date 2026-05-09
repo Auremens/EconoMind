@@ -51,20 +51,10 @@ export interface AppData {
   categoryRules: CategoryRule[];
   darkMode: boolean;
   lastBackup: number | null;
+  onboardingDone: boolean;
 }
 
-// ─── Default data ─────────────────────────────────────────────────────────────
-
-const DEFAULT_ACCOUNTS: Account[] = [
-  { id: "acc-1", name: "Compte courant Aurélien", initialBalance: 0, color: "#22c55e" },
-  { id: "acc-2", name: "Compte courant Alice", initialBalance: 0, color: "#3b82f6" },
-  { id: "acc-3", name: "Compte joint", initialBalance: 0, color: "#f59e0b" },
-  { id: "acc-4", name: "PEA Aurélien", initialBalance: 15000, color: "#8b5cf6" },
-  { id: "acc-5", name: "PEA Alice", initialBalance: 20350, color: "#ec4899" },
-  { id: "acc-6", name: "Livret A Alice", initialBalance: 9380, color: "#06b6d4" },
-  { id: "acc-7", name: "LEP Alice", initialBalance: 10000, color: "#10b981" },
-  { id: "acc-8", name: "LEP Aurélien", initialBalance: 2300, color: "#f97316" },
-];
+// ─── Default data — generic, no personal info ─────────────────────────────────
 
 export const DEFAULT_CATEGORIES = [
   "Logement",
@@ -92,11 +82,13 @@ const DEFAULT_CATEGORY_RULES: CategoryRule[] = [
   { keyword: "internet", category: "Abonnements" },
   { keyword: "netflix", category: "Abonnements" },
   { keyword: "spotify", category: "Abonnements" },
+  { keyword: "disney", category: "Abonnements" },
   { keyword: "carrefour", category: "Alimentation" },
   { keyword: "leclerc", category: "Alimentation" },
   { keyword: "lidl", category: "Alimentation" },
   { keyword: "aldi", category: "Alimentation" },
   { keyword: "monoprix", category: "Alimentation" },
+  { keyword: "intermarche", category: "Alimentation" },
   { keyword: "sncf", category: "Transport" },
   { keyword: "ratp", category: "Transport" },
   { keyword: "uber", category: "Transport" },
@@ -104,13 +96,11 @@ const DEFAULT_CATEGORY_RULES: CategoryRule[] = [
   { keyword: "pharmacie", category: "Santé" },
   { keyword: "médecin", category: "Santé" },
   { keyword: "mutuelle", category: "Santé" },
-  { keyword: "mgp", category: "Santé" },
   { keyword: "salaire", category: "Salaire" },
   { keyword: "virement salaire", category: "Salaire" },
-  { keyword: "école", category: "Éducation" },
-  { keyword: "saint-louis", category: "Éducation" },
   { keyword: "mcdo", category: "Restaurant" },
   { keyword: "restaurant", category: "Restaurant" },
+  { keyword: "école", category: "Éducation" },
 ];
 
 const DEFAULT_BUDGET: BudgetRule = {
@@ -130,11 +120,9 @@ export function loadData(): AppData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return getDefaultData();
     const parsed = JSON.parse(raw) as AppData;
-    // Merge missing fields
     return {
       ...getDefaultData(),
       ...parsed,
-      accounts: parsed.accounts?.length ? parsed.accounts : DEFAULT_ACCOUNTS,
     };
   } catch {
     return getDefaultData();
@@ -149,12 +137,13 @@ export function saveData(data: AppData): void {
 function getDefaultData(): AppData {
   return {
     transactions: [],
-    accounts: DEFAULT_ACCOUNTS,
+    accounts: [],           // empty — set during onboarding
     budgetRule: DEFAULT_BUDGET,
     goals: [],
     categoryRules: DEFAULT_CATEGORY_RULES,
     darkMode: true,
     lastBackup: null,
+    onboardingDone: false,  // triggers onboarding on first launch
   };
 }
 
