@@ -3,18 +3,18 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import {
-  LayoutDashboard, ArrowDownUp, Target,
-  BarChart3, Upload, Download, Moon, Sun,
+  LayoutDashboard, ArrowDownUp, Upload,
+  BarChart3, Target, Settings, Download,
 } from "lucide-react";
 import { useApp } from "@/context/AppContext";
 import { exportData, importData } from "@/lib/store";
 
 const NAV = [
-  { href: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { href: "/transactions", icon: ArrowDownUp, label: "Transactions" },
-  { href: "/import", icon: Upload, label: "Import" },
-  { href: "/objectifs", icon: Target, label: "Objectifs" },
-  { href: "/analyse", icon: BarChart3, label: "Analyse" },
+  { href: "/",             icon: LayoutDashboard, label: "Dashboard" },
+  { href: "/transactions", icon: ArrowDownUp,     label: "Transactions" },
+  { href: "/import",       icon: Upload,          label: "Import" },
+  { href: "/objectifs",    icon: Target,          label: "Objectifs" },
+  { href: "/analyse",      icon: BarChart3,       label: "Analyse" },
 ];
 
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -41,7 +41,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     }
   }, [data?.lastBackup]);
 
-  // Keep HTML class in sync — this is the single source of truth
   useEffect(() => {
     if (!data) return;
     if (data.darkMode) {
@@ -57,52 +56,47 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     setBackupNag(false);
   };
 
-  const handleImport = () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      try {
-        const restored = await importData(file);
-        dispatch({ type: "LOAD", data: restored });
-        alert("✅ Données restaurées !");
-      } catch {
-        alert("❌ Fichier invalide");
-      }
-    };
-    input.click();
-  };
-
   return (
     <div className="min-h-screen" style={{ background: "var(--bg)" }}>
       <header
         className="sticky top-0 z-40 px-4 py-3 flex items-center justify-between border-b"
-        style={{ background: "var(--surface)", borderColor: "var(--border)", paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}
+        style={{
+          background: "var(--surface)",
+          borderColor: "var(--border)",
+          paddingTop: "max(0.75rem, env(safe-area-inset-top))",
+        }}
       >
-        <span className="text-lg font-bold tracking-tight" style={{ fontFamily: "'Syne', sans-serif", color: "var(--green)" }}>
+        <span className="text-lg font-bold tracking-tight"
+          style={{ fontFamily: "'Syne', sans-serif", color: "var(--green)" }}>
           EconoMind
         </span>
         <div className="flex items-center gap-1">
           {showInstall && (
-            <button onClick={async () => { (installPrompt as any).prompt(); setShowInstall(false); }}
-              className="btn-ghost text-xs px-2 py-1.5">Installer</button>
+            <button
+              onClick={async () => { (installPrompt as any).prompt(); setShowInstall(false); }}
+              className="btn-ghost text-xs px-2 py-1.5"
+            >
+              Installer
+            </button>
           )}
-          <button onClick={handleExport} className="p-2 rounded-lg" style={{ color: "var(--text-2)" }} title="Exporter">
-            <Download size={17} />
-          </button>
-          <button onClick={handleImport} className="p-2 rounded-lg" style={{ color: "var(--text-2)" }} title="Importer">
-            <Upload size={17} />
-          </button>
           <button
-            onClick={() => dispatch({ type: "TOGGLE_DARK" })}
+            onClick={handleExport}
             className="p-2 rounded-lg"
             style={{ color: "var(--text-2)" }}
-            title={data?.darkMode ? "Passer en mode clair" : "Passer en mode sombre"}
+            title="Exporter les données"
           >
-            {data?.darkMode ? <Sun size={17} /> : <Moon size={17} />}
+            <Download size={17} />
           </button>
+          <Link
+            href="/parametres"
+            className="p-2 rounded-lg transition-colors"
+            style={{
+              color: router.pathname === "/parametres" ? "var(--green)" : "var(--text-2)",
+            }}
+            title="Paramètres"
+          >
+            <Settings size={17} />
+          </Link>
         </div>
       </header>
 
@@ -123,10 +117,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             const active = router.pathname === href;
             return (
               <Link key={href} href={href}
-                className="flex-1 flex flex-col items-center gap-0.5 py-2.5 text-xs font-medium transition-colors"
+                className="flex-1 flex flex-col items-center gap-0.5 py-2.5 transition-colors"
                 style={{ color: active ? "var(--green)" : "var(--text-3)" }}>
-                <Icon size={20} strokeWidth={active ? 2.5 : 1.8} />
-                <span className="text-[10px]">{label}</span>
+                <Icon size={19} strokeWidth={active ? 2.5 : 1.8} />
+                <span className="text-[9px] font-medium">{label}</span>
               </Link>
             );
           })}
