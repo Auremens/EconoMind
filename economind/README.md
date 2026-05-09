@@ -4,7 +4,7 @@ Application web PWA de gestion de budget pour couple — mobile-first, intellige
 
 ---
 
-## ✨ Fonctionnalités
+## ✨ Fonctionnalités 
 
 - **Dashboard** : reste à vivre en 5 secondes, alertes, projection 6 mois
 - **Transactions** : ajout manuel, filtres, modification, suppression
