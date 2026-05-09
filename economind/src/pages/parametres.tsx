@@ -142,7 +142,31 @@ export default function Parametres() {
             </button>
           </div>
         </section>
-
+{/* Support */}
+        <section className="space-y-2">
+          <p className="text-xs font-bold uppercase tracking-widest px-1"
+            style={{ color: "var(--text-3)" }}>Support</p>
+          <div className="card">
+            <Link href="/feedback"
+              className="flex items-center justify-between w-full">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center"
+                  style={{ background: "rgba(96,165,250,0.1)" }}>
+                  <MessageSquare size={15} style={{ color: "var(--blue)" }} />
+                </div>
+                <div className="text-left">
+                  <p className="text-sm font-medium" style={{ color: "var(--text)" }}>
+                    Signaler / Suggérer
+                  </p>
+                  <p className="text-xs" style={{ color: "var(--text-3)" }}>
+                    Bug, idée, question — écris-nous
+                  </p>
+                </div>
+              </div>
+              <ChevronRight size={16} style={{ color: "var(--text-3)" }} />
+            </Link>
+          </div>
+        </section>
         {/* Confidentialité */}
         <section className="space-y-2">
           <p className="text-xs font-bold uppercase tracking-widest px-1"
