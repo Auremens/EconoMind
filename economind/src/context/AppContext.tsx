@@ -37,7 +37,8 @@ type Action =
   | { type: "DELETE_GOAL"; id: string }
   | { type: "LEARN_CATEGORY"; label: string; category: string }
   | { type: "TOGGLE_DARK" }
-  | { type: "SET_LAST_BACKUP"; ts: number };
+  | { type: "SET_LAST_BACKUP"; ts: number }
+  | { type: "SET_ONBOARDING_DONE" };
 
 function reducer(state: AppData, action: Action): AppData {
   switch (action.type) {
@@ -116,6 +117,8 @@ function reducer(state: AppData, action: Action): AppData {
       return { ...state, darkMode: !state.darkMode };
     case "SET_LAST_BACKUP":
       return { ...state, lastBackup: action.ts };
+    case "SET_ONBOARDING_DONE":
+      return { ...state, onboardingDone: true };
     default:
       return state;
   }
@@ -137,18 +140,15 @@ const AppContext = createContext<AppContextValue | null>(null);
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [data, dispatch] = useReducer(reducer, null as unknown as AppData);
 
-  // Load from localStorage on mount
   useEffect(() => {
     const loaded = loadData();
     dispatch({ type: "LOAD", data: loaded });
   }, []);
 
-  // Save to localStorage on every change
   useEffect(() => {
     if (data) saveData(data);
   }, [data]);
 
-  // Apply dark mode
   useEffect(() => {
     if (!data) return;
     if (data.darkMode) {
@@ -181,7 +181,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     dispatch({ type: "BULK_ADD", transactions });
   }, []);
 
-  if (!data) return null; // Loading
+  if (!data) return null;
 
   return (
     <AppContext.Provider
