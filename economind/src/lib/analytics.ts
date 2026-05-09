@@ -1,14 +1,11 @@
-import { Transaction, CategoryRule, DEFAULT_CATEGORIES } from "./store";
+import { Transaction, CategoryRule, DEFAULT_CATEGORIES, isTransferCategory } from "./store";
 
 // ─── Auto-categorisation ──────────────────────────────────────────────────────
 
 export function autoCategory(label: string, rules: CategoryRule[]): string {
   const lower = label.toLowerCase();
-  // User-learned rules first
   for (const rule of rules) {
-    if (lower.includes(rule.keyword.toLowerCase())) {
-      return rule.category;
-    }
+    if (lower.includes(rule.keyword.toLowerCase())) return rule.category;
   }
   return "Autre";
 }
@@ -18,11 +15,8 @@ export function learnCategory(
   category: string,
   rules: CategoryRule[]
 ): CategoryRule[] {
-  // Extract meaningful keyword (first 2 words)
   const keyword = label.toLowerCase().split(/\s+/).slice(0, 2).join(" ");
-  const existing = rules.findIndex(
-    (r) => r.keyword.toLowerCase() === keyword
-  );
+  const existing = rules.findIndex((r) => r.keyword.toLowerCase() === keyword);
   if (existing >= 0) {
     const updated = [...rules];
     updated[existing] = { keyword, category };
@@ -42,13 +36,7 @@ export interface DuplicateResult {
 }
 
 function daysDiff(a: string, b: string): number {
-  return Math.abs(
-    (new Date(a).getTime() - new Date(b).getTime()) / 86400000
-  );
-}
-
-function amountDiff(a: number, b: number): number {
-  return Math.abs(a - b);
+  return Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000);
 }
 
 function labelSimilarity(a: string, b: string): number {
@@ -56,12 +44,11 @@ function labelSimilarity(a: string, b: string): number {
   const nb = b.toLowerCase().replace(/\s+/g, "");
   if (na === nb) return 1;
   if (na.includes(nb) || nb.includes(na)) return 0.8;
-  // Bigram similarity
   const bigrams = (s: string) =>
     Array.from({ length: s.length - 1 }, (_, i) => s.slice(i, i + 2));
   const bg1 = new Set(bigrams(na));
   const bg2 = new Set(bigrams(nb));
-  const intersection = [...bg1].filter((x) => bg2.has(x)).length;
+  const intersection = Array.from(bg1).filter((x) => bg2.has(x)).length;
   return (2 * intersection) / (bg1.size + bg2.size) || 0;
 }
 
@@ -79,7 +66,7 @@ export function detectDuplicates(
     let found = false;
     for (const ex of existing) {
       const dDays = daysDiff(inc.date, ex.date);
-      const dAmount = amountDiff(inc.amount, ex.amount);
+      const dAmount = Math.abs(inc.amount - ex.amount);
       const similarity = labelSimilarity(inc.label, ex.label);
 
       if (dDays <= 3 && dAmount <= 2 && similarity > 0.6) {
@@ -87,7 +74,6 @@ export function detectDuplicates(
         const exPriority = SOURCE_PRIORITY[ex.source] || 1;
 
         if (similarity > 0.9 && dDays === 0 && dAmount === 0) {
-          // Perfect match → auto merge (keep higher priority)
           duplicates.push({
             level: "auto",
             existing: ex,
@@ -96,7 +82,6 @@ export function detectDuplicates(
         } else if (similarity > 0.7) {
           duplicates.push({ level: "ask", existing: ex, incoming: inc });
         }
-        // else ignore (low similarity with close amount/date)
         found = true;
         break;
       }
@@ -107,13 +92,14 @@ export function detectDuplicates(
   return { toAdd, duplicates };
 }
 
-// ─── Analytics ───────────────────────────────────────────────────────────────
+// ─── Analytics — transfers excluded from income/expense ───────────────────────
 
 export interface MonthStats {
-  month: string; // YYYY-MM
+  month: string;
   income: number;
   expenses: number;
-  balance: number;
+  transfers: number; // sum of internal transfer amounts (absolute)
+  balance: number;   // income - expenses (transfers excluded)
   savingsRate: number;
   byCategory: { [cat: string]: number };
   byAccount: { [acc: string]: number };
@@ -126,13 +112,23 @@ export function computeMonthStats(
   const filtered = transactions.filter((t) => t.date.startsWith(month));
   let income = 0;
   let expenses = 0;
+  let transfers = 0;
   const byCategory: { [cat: string]: number } = {};
   const byAccount: { [acc: string]: number } = {};
 
   for (const t of filtered) {
-    if (t.amount > 0) income += t.amount;
-    else expenses += Math.abs(t.amount);
+    const isTransfer = isTransferCategory(t.category);
 
+    if (isTransfer) {
+      // Internal transfer — excluded from income/expense, tracked separately
+      transfers += Math.abs(t.amount);
+    } else if (t.amount > 0) {
+      income += t.amount;
+    } else {
+      expenses += Math.abs(t.amount);
+    }
+
+    // Always include in category breakdown (for visibility)
     const cat = t.category;
     byCategory[cat] = (byCategory[cat] || 0) + Math.abs(t.amount);
     byAccount[t.account] = (byAccount[t.account] || 0) + t.amount;
@@ -141,7 +137,7 @@ export function computeMonthStats(
   const balance = income - expenses;
   const savingsRate = income > 0 ? (balance / income) * 100 : 0;
 
-  return { month, income, expenses, balance, savingsRate, byCategory, byAccount };
+  return { month, income, expenses, transfers, balance, savingsRate, byCategory, byAccount };
 }
 
 export function getLast6Months(): string[] {
@@ -167,8 +163,7 @@ export function computeProjection(
 ): { month: string; projected: number; cumulative: number }[] {
   const last6 = getLast6Months();
   const stats = last6.map((m) => computeMonthStats(transactions, m));
-  const avgBalance =
-    stats.reduce((s, m) => s + m.balance, 0) / (stats.length || 1);
+  const avgBalance = stats.reduce((s, m) => s + m.balance, 0) / (stats.length || 1);
 
   const result = [];
   let cumulative = 0;
@@ -202,24 +197,25 @@ export function generateSuggestions(
   const prevMonth = getPrevMonth(currentMonth);
   const prevStats = computeMonthStats(transactions, prevMonth);
 
-  // 1. Highest spending category
-  const topCat = Object.entries(stats.byCategory).sort(
-    (a, b) => b[1] - a[1]
-  )[0];
-  if (topCat && topCat[1] > 500) {
+  // Exclude transfer categories from suggestions
+  const spendByCategory = Object.entries(stats.byCategory).filter(
+    ([cat]) => !isTransferCategory(cat) && stats.byCategory[cat] > 0
+  );
+
+  const topCat = spendByCategory.sort((a, b) => b[1] - a[1])[0];
+  if (topCat && topCat[1] > 300) {
     suggestions.push({
       type: "high-spend",
       title: `Dépenses élevées : ${topCat[0]}`,
-      description: `Tu as dépensé ${formatEur(topCat[1])} en ${topCat[0]} ce mois-ci.`,
+      description: `${formatEur(topCat[1])} en ${topCat[0]} ce mois-ci.`,
       amount: topCat[1],
       icon: "📊",
     });
   }
 
-  // 2. Anomaly: big increase vs prev month
-  for (const [cat, amount] of Object.entries(stats.byCategory)) {
+  for (const [cat, amount] of spendByCategory) {
     const prev = prevStats.byCategory[cat] || 0;
-    if (prev > 0 && amount > prev * 1.5 && amount - prev > 100) {
+    if (prev > 0 && amount > prev * 1.5 && amount - prev > 80) {
       suggestions.push({
         type: "anomaly",
         title: `Hausse inhabituelle : ${cat}`,
@@ -231,20 +227,19 @@ export function generateSuggestions(
     }
   }
 
-  // 3. Savings tip
   if (stats.savingsRate < 10 && stats.income > 0) {
     suggestions.push({
       type: "optimization",
       title: "Taux d'épargne faible",
-      description: `Seulement ${stats.savingsRate.toFixed(1)}% d'épargne ce mois. Objectif recommandé : 20%.`,
+      description: `${stats.savingsRate.toFixed(1)}% d'épargne ce mois. Objectif recommandé : 20%.`,
       icon: "💡",
     });
   } else if (stats.savingsRate > 20) {
-    const excess = stats.income * (stats.savingsRate - 20) / 100;
+    const excess = (stats.income * (stats.savingsRate - 20)) / 100;
     suggestions.push({
       type: "optimization",
       title: "Bon mois ! Investis le surplus",
-      description: `Tu as ${formatEur(excess)} de surplus au-delà de 20%. Pense à alimenter ton PEA.`,
+      description: `${formatEur(excess)} de surplus au-delà de 20%. Pense à alimenter ton PEA.`,
       amount: excess,
       icon: "🚀",
     });
@@ -266,8 +261,6 @@ export function formatEur(amount: number): string {
     maximumFractionDigits: 0,
   }).format(amount);
 }
-
-// ─── Account balance ──────────────────────────────────────────────────────────
 
 export function computeAccountBalance(
   accountId: string,

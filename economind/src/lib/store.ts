@@ -1,16 +1,17 @@
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type TransactionType = "income" | "expense";
+export type TransactionType = "income" | "expense" | "transfer";
 export type TransactionSource = "manual" | "csv" | "pdf";
 
 export interface Transaction {
   id: string;
   date: string; // ISO YYYY-MM-DD
   label: string;
-  amount: number; // positive = income, negative = expense
+  amount: number;        // positive = income/transfer-in, negative = expense/transfer-out
   category: string;
   account: string;
   source: TransactionSource;
+  transferType?: "transfer"; // marks internal transfers — excluded from expense stats
   createdAt: number;
 }
 
@@ -23,9 +24,9 @@ export interface Account {
 
 export interface BudgetRule {
   mode: "503020" | "custom";
-  needs: number;    // %
-  wants: number;    // %
-  savings: number;  // %
+  needs: number;
+  wants: number;
+  savings: number;
 }
 
 export interface Goal {
@@ -33,7 +34,7 @@ export interface Goal {
   name: string;
   targetAmount: number;
   currentAmount: number;
-  deadline: string; // ISO YYYY-MM-DD
+  deadline: string;
   color: string;
   createdAt: number;
 }
@@ -54,9 +55,28 @@ export interface AppData {
   onboardingDone: boolean;
 }
 
-// ─── Default data — generic, no personal info ─────────────────────────────────
+// ─── Transfer categories — excluded from expense/income stats ─────────────────
+
+export const TRANSFER_CATEGORIES = [
+  "Virement interne",
+  "Épargne programmée",
+  "Investissement PEA",
+  "Investissement LDDS",
+  "Investissement LEP",
+  "Investissement livret",
+];
+
+export const isTransferCategory = (category: string): boolean =>
+  TRANSFER_CATEGORIES.includes(category);
+
+// ─── Default categories ───────────────────────────────────────────────────────
 
 export const DEFAULT_CATEGORIES = [
+  // Revenus
+  "Salaire",
+  "Aide sociale",
+  "Remboursement",
+  // Dépenses courantes
   "Logement",
   "Alimentation",
   "Transport",
@@ -64,43 +84,70 @@ export const DEFAULT_CATEGORIES = [
   "Éducation",
   "Loisirs",
   "Habillement",
-  "Épargne",
-  "Salaire",
-  "Aide sociale",
-  "Remboursement",
   "Abonnements",
   "Restaurant",
   "Vacances",
   "Enfant",
   "Autre",
+  // Virements internes (ne comptent pas comme dépenses)
+  ...TRANSFER_CATEGORIES,
 ];
 
 const DEFAULT_CATEGORY_RULES: CategoryRule[] = [
+  // Logement
   { keyword: "loyer", category: "Logement" },
   { keyword: "edf", category: "Logement" },
   { keyword: "engie", category: "Logement" },
+  // Abonnements
   { keyword: "internet", category: "Abonnements" },
   { keyword: "netflix", category: "Abonnements" },
   { keyword: "spotify", category: "Abonnements" },
   { keyword: "disney", category: "Abonnements" },
+  { keyword: "orange", category: "Abonnements" },
+  { keyword: "sfr", category: "Abonnements" },
+  { keyword: "bouygues", category: "Abonnements" },
+  // Alimentation
   { keyword: "carrefour", category: "Alimentation" },
   { keyword: "leclerc", category: "Alimentation" },
   { keyword: "lidl", category: "Alimentation" },
   { keyword: "aldi", category: "Alimentation" },
   { keyword: "monoprix", category: "Alimentation" },
   { keyword: "intermarche", category: "Alimentation" },
+  { keyword: "franprix", category: "Alimentation" },
+  { keyword: "casino", category: "Alimentation" },
+  // Transport
   { keyword: "sncf", category: "Transport" },
   { keyword: "ratp", category: "Transport" },
   { keyword: "uber", category: "Transport" },
   { keyword: "essence", category: "Transport" },
+  // Santé
   { keyword: "pharmacie", category: "Santé" },
   { keyword: "médecin", category: "Santé" },
   { keyword: "mutuelle", category: "Santé" },
+  { keyword: "mgp", category: "Santé" },
+  // Salaire
   { keyword: "salaire", category: "Salaire" },
-  { keyword: "virement salaire", category: "Salaire" },
+  { keyword: "drfip", category: "Salaire" },
+  { keyword: "ddfip", category: "Salaire" },
+  { keyword: "remuneration", category: "Salaire" },
+  { keyword: "rémunération", category: "Salaire" },
+  // Restaurant
   { keyword: "mcdo", category: "Restaurant" },
   { keyword: "restaurant", category: "Restaurant" },
+  // Éducation
   { keyword: "école", category: "Éducation" },
+  // ── Virements internes (ne comptent PAS comme dépenses) ──
+  { keyword: "fortuneo", category: "Investissement PEA" },
+  { keyword: "pea", category: "Investissement PEA" },
+  { keyword: "ldds", category: "Investissement LDDS" },
+  { keyword: "lep", category: "Investissement LEP" },
+  { keyword: "livret", category: "Investissement livret" },
+  { keyword: "épargne programmee", category: "Épargne programmée" },
+  { keyword: "epargne programmee", category: "Épargne programmée" },
+  { keyword: "scalable", category: "Investissement PEA" },
+  { keyword: "virement interne", category: "Virement interne" },
+  { keyword: "boursobank", category: "Virement interne" },
+  { keyword: "banque pop", category: "Virement interne" },
 ];
 
 const DEFAULT_BUDGET: BudgetRule = {
@@ -120,10 +167,7 @@ export function loadData(): AppData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return getDefaultData();
     const parsed = JSON.parse(raw) as AppData;
-    return {
-      ...getDefaultData(),
-      ...parsed,
-    };
+    return { ...getDefaultData(), ...parsed };
   } catch {
     return getDefaultData();
   }
@@ -137,13 +181,13 @@ export function saveData(data: AppData): void {
 function getDefaultData(): AppData {
   return {
     transactions: [],
-    accounts: [],           // empty — set during onboarding
+    accounts: [],
     budgetRule: DEFAULT_BUDGET,
     goals: [],
     categoryRules: DEFAULT_CATEGORY_RULES,
     darkMode: true,
     lastBackup: null,
-    onboardingDone: false,  // triggers onboarding on first launch
+    onboardingDone: false,
   };
 }
 
@@ -162,8 +206,7 @@ export function importData(file: File): Promise<AppData> {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const data = JSON.parse(e.target?.result as string) as AppData;
-        resolve(data);
+        resolve(JSON.parse(e.target?.result as string) as AppData);
       } catch {
         reject(new Error("Fichier JSON invalide"));
       }
@@ -172,8 +215,6 @@ export function importData(file: File): Promise<AppData> {
     reader.readAsText(file);
   });
 }
-
-// ─── ID generation ────────────────────────────────────────────────────────────
 
 export function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
