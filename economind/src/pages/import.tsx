@@ -6,13 +6,16 @@ import { parseCSV, replaceMonthWithCSV } from "@/lib/csvImport";
 import { parsePDF } from "@/lib/pdfImport";
 import { detectDuplicates, DuplicateResult, formatEur } from "@/lib/analytics";
 import { Transaction } from "@/lib/store";
-import { Upload, FileText, AlertTriangle, Check, X, FileSpreadsheet } from "lucide-react";
+import {
+  Upload, FileText, AlertTriangle, Check, X,
+  FileSpreadsheet, RotateCcw, Clock,
+} from "lucide-react";
 
 type Step = "idle" | "preview" | "duplicates" | "done";
 type FileType = "csv" | "pdf";
 
 export default function Import() {
-  const { data, dispatch } = useApp();
+  const { data, dispatch, importWithSnapshot, lastImport, undoLastImport } = useApp();
   const [step, setStep] = useState<Step>("idle");
   const [selectedAccount, setSelectedAccount] = useState(data.accounts[0]?.name || "");
   const [preview, setPreview] = useState<Transaction[]>([]);
@@ -22,6 +25,7 @@ export default function Import() {
   const [error, setError] = useState("");
   const [fileType, setFileType] = useState<FileType>("csv");
   const [fileName, setFileName] = useState("");
+  const [showUndo, setShowUndo] = useState(false);
   const [resolvedDuplicates, setResolvedDuplicates] = useState<{
     [key: string]: "keep" | "replace" | "skip";
   }>({});
@@ -41,7 +45,6 @@ export default function Import() {
       } else {
         parsed = await parseCSV(file, selectedAccount, data.categoryRules);
       }
-
       const { toAdd: clean, duplicates: dups } = detectDuplicates(parsed, data.transactions);
       const toResolve = dups.filter((d) => d.level !== "auto");
       setPreview(parsed);
@@ -70,26 +73,51 @@ export default function Import() {
 
   const doImport = () => {
     const month = preview[0]?.date.slice(0, 7) || "";
-    let finalTransactions: Transaction[];
-
-    if (fileType === "csv") {
-      finalTransactions = replaceMonthWithCSV(data.transactions, toAdd, month, selectedAccount);
-    } else {
-      // PDF: just add, don't replace manual
-      finalTransactions = [...data.transactions, ...toAdd];
-    }
-
     const additionalFromDups: Transaction[] = [];
     duplicates.forEach((dup, i) => {
-      const resolution = resolvedDuplicates[i] || "skip";
-      if (resolution === "replace") additionalFromDups.push(dup.incoming);
+      if ((resolvedDuplicates[i] || "skip") === "replace") {
+        additionalFromDups.push(dup.incoming);
+      }
+    });
+    const allNew = [...toAdd, ...additionalFromDups];
+
+    // Human-readable label for undo history
+    const monthLabel = month
+      ? new Date(month + "-01").toLocaleDateString("fr-FR", { month: "long", year: "numeric" })
+      : "";
+    const snapshotLabel = `${fileType.toUpperCase()} — ${selectedAccount}${monthLabel ? " — " + monthLabel : ""} (${allNew.length} opérations)`;
+
+    importWithSnapshot(allNew, snapshotLabel, (existing) => {
+      if (fileType === "csv") {
+        return replaceMonthWithCSV(existing, allNew, month, selectedAccount);
+      } else {
+        return [...existing, ...allNew].sort((a, b) => b.date.localeCompare(a.date));
+      }
     });
 
-    dispatch({ type: "SET_TRANSACTIONS", transactions: [...finalTransactions, ...additionalFromDups] });
     setStep("done");
+    setShowUndo(true);
+  };
+
+  const handleUndo = () => {
+    undoLastImport();
+    setStep("idle");
+    setPreview([]);
+    setDuplicates([]);
+    setToAdd([]);
+    setFileName("");
+    setShowUndo(false);
   };
 
   const month = preview[0]?.date.slice(0, 7) || "";
+
+  const formatTimestamp = (ts: number) => {
+    const d = new Date(ts);
+    return d.toLocaleDateString("fr-FR", {
+      day: "2-digit", month: "2-digit", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+  };
 
   return (
     <Layout>
@@ -102,10 +130,90 @@ export default function Import() {
           </p>
         </div>
 
+        {/* ── Undo last import ── */}
+        {lastImport && (
+          <div
+            className="rounded-2xl p-4 space-y-2"
+            style={{
+              background: "rgba(96,165,250,0.07)",
+              border: "1px solid rgba(96,165,250,0.2)",
+            }}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-start gap-2 min-w-0">
+                <Clock size={14} style={{ color: "var(--blue)", marginTop: 2, shrink: 0 }} />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold" style={{ color: "var(--blue)" }}>
+                    Dernier import
+                  </p>
+                  <p className="text-xs truncate mt-0.5" style={{ color: "var(--text-2)" }}>
+                    {lastImport.label}
+                  </p>
+                  <p className="text-[10px] mt-0.5" style={{ color: "var(--text-3)" }}>
+                    {formatTimestamp(lastImport.timestamp)}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  if (confirm(`Annuler l'import "${lastImport.label}" ?\n\nLes ${lastImport.transactionsImported.length} transactions importées seront supprimées et l'état précédent sera restauré.`)) {
+                    handleUndo();
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold shrink-0 transition-all active:scale-95"
+                style={{
+                  background: "rgba(96,165,250,0.15)",
+                  color: "var(--blue)",
+                }}
+              >
+                <RotateCcw size={13} />
+                Annuler
+              </button>
+            </div>
+
+            {/* Preview of what was imported */}
+            {lastImport.transactionsImported.length > 0 && (
+              <div
+                className="rounded-xl p-3 space-y-1.5 max-h-40 overflow-y-auto"
+                style={{ background: "var(--surface-2)" }}
+              >
+                <p className="text-[10px] font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--text-3)" }}>
+                  {lastImport.transactionsImported.length} opérations importées
+                </p>
+                {lastImport.transactionsImported.slice(0, 10).map((tx) => (
+                  <div key={tx.id} className="flex items-center justify-between">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs truncate" style={{ color: "var(--text)" }}>{tx.label}</p>
+                      <p className="text-[10px]" style={{ color: "var(--text-3)" }}>
+                        {tx.date} · {tx.account}
+                      </p>
+                    </div>
+                    <span
+                      className="text-xs font-mono font-semibold ml-2 shrink-0"
+                      style={{ color: tx.amount >= 0 ? "var(--green)" : "var(--red)" }}
+                    >
+                      {tx.amount >= 0 ? "+" : ""}{formatEur(tx.amount)}
+                    </span>
+                  </div>
+                ))}
+                {lastImport.transactionsImported.length > 10 && (
+                  <p className="text-[10px] text-center pt-1" style={{ color: "var(--text-3)" }}>
+                    +{lastImport.transactionsImported.length - 10} autres
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Account selector */}
         <div className="card space-y-2">
           <label className="label">Compte associé</label>
-          <select className="input" value={selectedAccount} onChange={(e) => setSelectedAccount(e.target.value)}>
+          <select
+            className="input"
+            value={selectedAccount}
+            onChange={(e) => setSelectedAccount(e.target.value)}
+          >
             {data.accounts.map((a) => (
               <option key={a.id} value={a.name}>{a.name}</option>
             ))}
@@ -130,16 +238,20 @@ export default function Import() {
             />
             {loading ? (
               <div className="text-center">
-                <div className="w-8 h-8 rounded-full border-2 border-t-transparent animate-spin mx-auto mb-2"
-                  style={{ borderColor: "var(--green)" }} />
+                <div
+                  className="w-8 h-8 rounded-full border-2 border-t-transparent animate-spin mx-auto mb-2"
+                  style={{ borderColor: "var(--green)" }}
+                />
                 <p className="text-sm" style={{ color: "var(--text-2)" }}>
-                  {fileType === "pdf" ? "Extraction du PDF en cours..." : "Analyse en cours..."}
+                  {fileType === "pdf" ? "Extraction PDF en cours..." : "Analyse en cours..."}
                 </p>
               </div>
             ) : (
               <>
-                <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
-                  style={{ background: "rgba(34,197,94,0.1)" }}>
+                <div
+                  className="w-12 h-12 rounded-2xl flex items-center justify-center"
+                  style={{ background: "rgba(34,197,94,0.1)" }}
+                >
                   <Upload size={22} style={{ color: "var(--green)" }} />
                 </div>
                 <div className="text-center">
@@ -150,21 +262,25 @@ export default function Import() {
                     ou cliquer pour sélectionner
                   </p>
                 </div>
-
-                {/* Format badges */}
                 <div className="flex gap-2">
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
-                    style={{ background: "rgba(34,197,94,0.1)", color: "var(--green)" }}>
+                  <div
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+                    style={{ background: "rgba(34,197,94,0.1)", color: "var(--green)" }}
+                  >
                     <FileSpreadsheet size={13} /> CSV
                   </div>
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
-                    style={{ background: "rgba(239,68,68,0.1)", color: "var(--red)" }}>
+                  <div
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+                    style={{ background: "rgba(239,68,68,0.1)", color: "var(--red)" }}
+                  >
                     <FileText size={13} /> PDF
                   </div>
                 </div>
               </>
             )}
-            {error && <p className="text-sm font-medium" style={{ color: "var(--red)" }}>{error}</p>}
+            {error && (
+              <p className="text-sm font-medium" style={{ color: "var(--red)" }}>{error}</p>
+            )}
           </div>
         )}
 
@@ -186,16 +302,19 @@ export default function Import() {
                   </p>
                 </div>
               </div>
-
-              <div className="space-y-1.5 max-h-64 overflow-y-auto">
+              <div className="space-y-1.5 max-h-56 overflow-y-auto">
                 {preview.slice(0, 20).map((tx) => (
                   <div key={tx.id} className="flex items-center justify-between py-1">
                     <div className="min-w-0 flex-1">
                       <p className="text-xs truncate" style={{ color: "var(--text)" }}>{tx.label}</p>
-                      <p className="text-[10px]" style={{ color: "var(--text-3)" }}>{tx.date} · {tx.category}</p>
+                      <p className="text-[10px]" style={{ color: "var(--text-3)" }}>
+                        {tx.date} · {tx.category}
+                      </p>
                     </div>
-                    <span className="text-xs font-bold font-num ml-2 shrink-0"
-                      style={{ color: tx.amount >= 0 ? "var(--green)" : "var(--red)" }}>
+                    <span
+                      className="text-xs font-bold font-num ml-2 shrink-0"
+                      style={{ color: tx.amount >= 0 ? "var(--green)" : "var(--red)" }}
+                    >
                       {tx.amount >= 0 ? "+" : ""}{formatEur(tx.amount)}
                     </span>
                   </div>
@@ -209,8 +328,10 @@ export default function Import() {
             </div>
 
             {fileType === "csv" && (
-              <div className="rounded-xl p-3 flex items-start gap-2"
-                style={{ background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.2)" }}>
+              <div
+                className="rounded-xl p-3 flex items-start gap-2"
+                style={{ background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.2)" }}
+              >
                 <AlertTriangle size={15} style={{ color: "var(--amber)", marginTop: 1 }} />
                 <p className="text-xs" style={{ color: "var(--amber)" }}>
                   Les transactions manuelles du mois <strong>{month}</strong> pour <strong>{selectedAccount}</strong> seront remplacées.
@@ -218,18 +339,11 @@ export default function Import() {
               </div>
             )}
 
-            {fileType === "pdf" && (
-              <div className="rounded-xl p-3 flex items-start gap-2"
-                style={{ background: "rgba(96,165,250,0.07)", border: "1px solid rgba(96,165,250,0.2)" }}>
-                <FileText size={15} style={{ color: "var(--blue)", marginTop: 1 }} />
-                <p className="text-xs" style={{ color: "var(--blue)" }}>
-                  Import PDF : les transactions sont ajoutées sans remplacer les existantes.
-                </p>
-              </div>
-            )}
-
             {duplicates.length > 0 && (
-              <div className="rounded-xl p-3" style={{ background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.15)" }}>
+              <div
+                className="rounded-xl p-3"
+                style={{ background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.15)" }}
+              >
                 <p className="text-xs font-semibold" style={{ color: "var(--red)" }}>
                   {duplicates.length} doublon(s) potentiel(s) détecté(s)
                 </p>
@@ -251,13 +365,18 @@ export default function Import() {
         {step === "duplicates" && (
           <div className="space-y-3 fade-up">
             <div>
-              <p className="font-semibold text-sm" style={{ color: "var(--text)" }}>Résolution des doublons</p>
-              <p className="text-xs mt-0.5" style={{ color: "var(--text-3)" }}>Ces transactions ressemblent à des existantes</p>
+              <p className="font-semibold text-sm" style={{ color: "var(--text)" }}>
+                Résolution des doublons
+              </p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--text-3)" }}>
+                Ces transactions ressemblent à des existantes
+              </p>
             </div>
-
             {duplicates.map((dup, i) => (
               <div key={i} className="card space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--amber)" }}>🟠 Doublon potentiel</p>
+                <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--amber)" }}>
+                  🟠 Doublon potentiel
+                </p>
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div className="rounded-lg p-2" style={{ background: "var(--surface-2)" }}>
                     <p className="font-semibold mb-1" style={{ color: "var(--text-3)" }}>Existant</p>
@@ -282,21 +401,22 @@ export default function Import() {
                     { key: "keep", label: "Garder les 2", color: "var(--blue)" },
                     { key: "replace", label: "Remplacer", color: "var(--amber)" },
                   ].map(({ key, label, color }) => (
-                    <button key={key}
+                    <button
+                      key={key}
                       onClick={() => setResolvedDuplicates((r) => ({ ...r, [i]: key as any }))}
                       className="py-2 rounded-lg text-xs font-semibold transition-all"
                       style={{
                         background: resolvedDuplicates[i] === key ? `${color}22` : "var(--surface-2)",
                         color: resolvedDuplicates[i] === key ? color : "var(--text-2)",
                         border: resolvedDuplicates[i] === key ? `1px solid ${color}44` : "1px solid transparent",
-                      }}>
+                      }}
+                    >
                       {label}
                     </button>
                   ))}
                 </div>
               </div>
             ))}
-
             <button className="btn-primary w-full" onClick={doImport}>
               <Check size={15} /> Terminer l'import
             </button>
@@ -313,8 +433,19 @@ export default function Import() {
             <p className="text-sm mt-1" style={{ color: "var(--text-2)" }}>
               {toAdd.length} transactions importées
             </p>
-            <button className="btn-ghost mt-4 mx-auto"
-              onClick={() => { setStep("idle"); setPreview([]); setDuplicates([]); setToAdd([]); setFileName(""); }}>
+            <p className="text-xs mt-2" style={{ color: "var(--text-3)" }}>
+              Tu peux annuler cet import depuis le bloc ci-dessus si nécessaire.
+            </p>
+            <button
+              className="btn-ghost mt-4 mx-auto"
+              onClick={() => {
+                setStep("idle");
+                setPreview([]);
+                setDuplicates([]);
+                setToAdd([]);
+                setFileName("");
+              }}
+            >
               Importer un autre fichier
             </button>
           </div>
@@ -325,10 +456,10 @@ export default function Import() {
           <div className="card space-y-2">
             <p className="font-semibold text-sm" style={{ color: "var(--text)" }}>💡 Conseils</p>
             {[
-              "CSV : téléchargez votre relevé depuis l'espace client de votre banque",
-              "PDF : utilisez le relevé de compte PDF officiel de votre banque",
-              "PDF scanné (image) : non supporté — utilisez le PDF natif (texte)",
-              "La catégorisation est automatique et s'améliore avec vos corrections",
+              "Vérifiez toujours le compte sélectionné avant de valider",
+              "CSV : remplace les transactions manuelles du même mois",
+              "PDF : ajoute sans remplacer les transactions existantes",
+              "En cas d'erreur, utilisez le bouton Annuler en haut de cette page",
             ].map((tip, i) => (
               <p key={i} className="text-xs" style={{ color: "var(--text-3)" }}>• {tip}</p>
             ))}
