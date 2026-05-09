@@ -58,7 +58,7 @@ export default function Parametres() {
           <p className="text-xs font-bold uppercase tracking-widest px-1"
             style={{ color: "var(--text-3)" }}>Données</p>
 
-          <div className="card divide-y" style={{ divideColor: "var(--border)" }}>
+         <div className="card space-y-0 divide-y divide-gray-800">
 
             <button onClick={handleExport}
               className="flex items-center justify-between w-full py-3 first:pt-0 last:pb-0">
