@@ -5,6 +5,7 @@ import React, {
   useReducer,
   useEffect,
   useCallback,
+  useRef,
 } from "react";
 import {
   AppData,
@@ -18,6 +19,16 @@ import {
   generateId,
 } from "@/lib/store";
 import { learnCategory } from "@/lib/analytics";
+
+// ─── Import history entry ─────────────────────────────────────────────────────
+
+export interface ImportSnapshot {
+  id: string;
+  timestamp: number;
+  label: string; // e.g. "Import CSV — Compte courant Alice — avril 2026"
+  transactionsBefore: Transaction[];
+  transactionsImported: Transaction[];
+}
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
 
@@ -132,17 +143,47 @@ interface AppContextValue {
   addTransaction: (tx: Omit<Transaction, "id" | "createdAt">) => void;
   updateTransaction: (tx: Transaction) => void;
   deleteTransaction: (id: string) => void;
-  importTransactions: (transactions: Transaction[]) => void;
+  // Import with undo support
+  importWithSnapshot: (
+    transactions: Transaction[],
+    label: string,
+    setter: (transactions: Transaction[]) => Transaction[]
+  ) => void;
+  // Undo last import
+  lastImport: ImportSnapshot | null;
+  undoLastImport: () => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
 
+const SNAPSHOTS_KEY = "economind_import_snapshots";
+const MAX_SNAPSHOTS = 5;
+
+function loadSnapshots(): ImportSnapshot[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem(SNAPSHOTS_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveSnapshots(snapshots: ImportSnapshot[]): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(snapshots));
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [data, dispatch] = useReducer(reducer, null as unknown as AppData);
+  const [lastImport, setLastImport] = React.useState<ImportSnapshot | null>(null);
+  const snapshotsRef = useRef<ImportSnapshot[]>([]);
 
   useEffect(() => {
     const loaded = loadData();
     dispatch({ type: "LOAD", data: loaded });
+    const snaps = loadSnapshots();
+    snapshotsRef.current = snaps;
+    if (snaps.length > 0) setLastImport(snaps[snaps.length - 1]);
   }, []);
 
   useEffect(() => {
@@ -177,9 +218,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     dispatch({ type: "DELETE_TRANSACTION", id });
   }, []);
 
-  const importTransactions = useCallback((transactions: Transaction[]) => {
-    dispatch({ type: "BULK_ADD", transactions });
-  }, []);
+  // Import with automatic snapshot for undo
+  const importWithSnapshot = useCallback(
+    (
+      transactions: Transaction[],
+      label: string,
+      setter: (transactions: Transaction[]) => Transaction[]
+    ) => {
+      // Capture current state before import
+      const snapshot: ImportSnapshot = {
+        id: generateId(),
+        timestamp: Date.now(),
+        label,
+        transactionsBefore: data.transactions,
+        transactionsImported: transactions,
+      };
+
+      // Apply the import
+      const newTransactions = setter(data.transactions);
+      dispatch({ type: "SET_TRANSACTIONS", transactions: newTransactions });
+
+      // Save snapshot
+      const updated = [...snapshotsRef.current, snapshot].slice(-MAX_SNAPSHOTS);
+      snapshotsRef.current = updated;
+      saveSnapshots(updated);
+      setLastImport(snapshot);
+    },
+    [data]
+  );
+
+  // Undo last import — restore transactions to before state
+  const undoLastImport = useCallback(() => {
+    if (!lastImport) return;
+    dispatch({
+      type: "SET_TRANSACTIONS",
+      transactions: lastImport.transactionsBefore,
+    });
+    // Remove snapshot
+    const updated = snapshotsRef.current.filter((s) => s.id !== lastImport.id);
+    snapshotsRef.current = updated;
+    saveSnapshots(updated);
+    const prev = updated.length > 0 ? updated[updated.length - 1] : null;
+    setLastImport(prev);
+  }, [lastImport]);
 
   if (!data) return null;
 
@@ -191,7 +272,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addTransaction,
         updateTransaction,
         deleteTransaction,
-        importTransactions,
+        importWithSnapshot,
+        lastImport,
+        undoLastImport,
       }}
     >
       {children}
