@@ -1,14 +1,31 @@
 import type { AppProps } from "next/app";
 import Head from "next/head";
-import { AppProvider } from "@/context/AppContext";
+import { useEffect } from "react";
+import { useRouter } from "next/router";
+import { AppProvider, useApp } from "@/context/AppContext";
 import "@/styles/globals.css";
 
-export default function App({ Component, pageProps }: AppProps) {
+function AppContent({ Component, pageProps }: AppProps) {
+  const { data } = useApp();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!data) return;
+    const isOnboarding = router.pathname === "/onboarding";
+    if (!data.onboardingDone && !isOnboarding) {
+      router.replace("/onboarding");
+    }
+  }, [data, router]);
+
+  return <Component {...pageProps} />;
+}
+
+export default function App(props: AppProps) {
   return (
     <>
       <Head>
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-        <meta name="theme-color" content="#22c55e" />
+        <meta name="theme-color" content="#0f1117" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="EconoMind" />
@@ -19,7 +36,7 @@ export default function App({ Component, pageProps }: AppProps) {
         <title>EconoMind</title>
       </Head>
       <AppProvider>
-        <Component {...pageProps} />
+        <AppContent {...props} />
       </AppProvider>
     </>
   );
