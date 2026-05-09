@@ -1,6 +1,6 @@
 # EconoMind 💰
 
-Application web PWA de gestion de budget pour couple — mobile-first, intelligente, 100% locale.
+Application web PWA de gestion de budget pour couple — mobile-first, intelligente, 100% locale. 
 
 ---
 
