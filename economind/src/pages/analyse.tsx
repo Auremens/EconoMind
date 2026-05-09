@@ -12,6 +12,7 @@ import {
 } from "@/lib/analytics";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  AreaChart, Area,
   LineChart, Line, CartesianGrid, PieChart, Pie, Cell, Legend,
 } from "recharts";
 
