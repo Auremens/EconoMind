@@ -6,7 +6,7 @@ import { getCurrentMonth } from "@/lib/analytics";
 import { Bug, Lightbulb, HelpCircle, ThumbsUp, Mail } from "lucide-react";
 
 // ── Ton adresse email ─────────────────────────────────────────────────────────
-const SUPPORT_EMAIL = "TON_EMAIL@gmail.com"; // ← remplace ici
+const SUPPORT_EMAIL = "auremen91@gmail.com"; // ← remplace ici
 // ─────────────────────────────────────────────────────────────────────────────
 
 const FEEDBACK_TYPES = [
