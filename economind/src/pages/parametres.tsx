@@ -4,10 +4,8 @@ import Layout from "@/components/Layout";
 import { useApp } from "@/context/AppContext";
 import { exportData } from "@/lib/store";
 import { useRouter } from "next/router";
-import {
-  Download, Upload, RotateCcw, Trash2,
-  ChevronRight, Moon, Sun, Shield,
-} from "lucide-react";
+import { Download, Upload, RotateCcw, Trash2, ChevronRight, Moon, Sun, Shield, MessageSquare } from "lucide-react";
+import Link from "next/link";
 
 export default function Parametres() {
   const { data, dispatch } = useApp();
