@@ -2,15 +2,29 @@
 import React, { useState } from "react";
 import Layout from "@/components/Layout";
 import { useApp } from "@/context/AppContext";
-import { exportData } from "@/lib/store";
-import { useRouter } from "next/router";
-import { Download, Upload, RotateCcw, Trash2, ChevronRight, Moon, Sun, Shield, MessageSquare } from "lucide-react";
+import { exportData, Account, generateId } from "@/lib/store";
 import Link from "next/link";
+import {
+  Download, Upload, RotateCcw, Trash2, ChevronRight,
+  Moon, Sun, Shield, MessageSquare, Plus, Edit2, Check, X,
+} from "lucide-react";
+
+const ACCOUNT_COLORS = [
+  "#22c55e","#3b82f6","#f59e0b","#ef4444",
+  "#8b5cf6","#06b6d4","#ec4899","#10b981","#f97316","#84cc16",
+];
+
+const EMPTY_ACC = { name: "", initialBalance: "", color: "#22c55e" };
 
 export default function Parametres() {
   const { data, dispatch } = useApp();
-  const router = useRouter();
   const [confirmStep, setConfirmStep] = useState<0 | 1 | 2>(0);
+
+  // Account management state
+  const [showAddAcc, setShowAddAcc] = useState(false);
+  const [newAcc, setNewAcc] = useState(EMPTY_ACC);
+  const [editAccId, setEditAccId] = useState<string | null>(null);
+  const [editAccForm, setEditAccForm] = useState(EMPTY_ACC);
 
   const handleExport = () => {
     exportData(data);
@@ -37,78 +51,227 @@ export default function Parametres() {
   };
 
   const handleReset = () => {
-    // Clear everything
     localStorage.clear();
-    // Reload → will trigger onboarding
     window.location.href = "/";
+  };
+
+  const handleAddAccount = () => {
+    if (!newAcc.name.trim()) return;
+    const account: Account = {
+      id: generateId(),
+      name: newAcc.name.trim(),
+      initialBalance: parseFloat(newAcc.initialBalance) || 0,
+      color: newAcc.color,
+    };
+    dispatch({ type: "ADD_ACCOUNT", account });
+    setNewAcc(EMPTY_ACC);
+    setShowAddAcc(false);
+  };
+
+  const handleEditAccount = (acc: Account) => {
+    setEditAccId(acc.id);
+    setEditAccForm({
+      name: acc.name,
+      initialBalance: acc.initialBalance.toString(),
+      color: acc.color,
+    });
+  };
+
+  const handleSaveAccount = () => {
+    if (!editAccId || !editAccForm.name.trim()) return;
+    const original = data.accounts.find(a => a.id === editAccId)!;
+    dispatch({
+      type: "UPDATE_ACCOUNT",
+      account: {
+        ...original,
+        name: editAccForm.name.trim(),
+        initialBalance: parseFloat(editAccForm.initialBalance) || 0,
+        color: editAccForm.color,
+      },
+    });
+    setEditAccId(null);
+  };
+
+  const handleDeleteAccount = (acc: Account) => {
+    const txCount = data.transactions.filter(t => t.account === acc.name).length;
+    const msg = txCount > 0
+      ? `Supprimer "${acc.name}" ?\n\n⚠️ Ce compte a ${txCount} transaction(s) associée(s). Elles ne seront pas supprimées mais n'auront plus de compte rattaché.`
+      : `Supprimer "${acc.name}" ?`;
+    if (confirm(msg)) {
+      dispatch({ type: "DELETE_ACCOUNT", id: acc.id });
+    }
   };
 
   return (
     <Layout>
       <div className="px-4 pt-4 space-y-5 animate-stagger">
 
-        <div>
-          <p className="section-title">Paramètres</p>
-        </div>
+        <p className="section-title">Paramètres</p>
 
-        {/* Données */}
+        {/* ── Comptes ── */}
         <section className="space-y-2">
-          <p className="text-xs font-bold uppercase tracking-widest px-1"
-            style={{ color: "var(--text-3)" }}>Données</p>
+          <p className="text-xs font-bold uppercase tracking-widest px-1" style={{ color: "var(--text-3)" }}>
+            Comptes
+          </p>
 
-         <div className="card space-y-0 divide-y divide-gray-800">
+          <div className="space-y-2">
+            {data.accounts.map((acc) => (
+              <div key={acc.id}>
+                {editAccId === acc.id ? (
+                  /* Edit form inline */
+                  <div className="card space-y-3 fade-up">
+                    <div className="flex gap-2">
+                      <input className="input flex-1" value={editAccForm.name}
+                        onChange={(e) => setEditAccForm(f => ({ ...f, name: e.target.value }))}
+                        placeholder="Nom du compte" />
+                      <input className="input w-28" type="number"
+                        value={editAccForm.initialBalance}
+                        onChange={(e) => setEditAccForm(f => ({ ...f, initialBalance: e.target.value }))}
+                        placeholder="Solde init." />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex gap-1.5 flex-wrap flex-1">
+                        {ACCOUNT_COLORS.map((c) => (
+                          <button key={c} onClick={() => setEditAccForm(f => ({ ...f, color: c }))}
+                            className="w-6 h-6 rounded-full transition-all"
+                            style={{
+                              background: c,
+                              outline: editAccForm.color === c ? `2px solid ${c}` : "none",
+                              outlineOffset: "2px",
+                            }} />
+                        ))}
+                      </div>
+                      <button className="btn-primary px-3 py-2" onClick={handleSaveAccount}>
+                        <Check size={14} />
+                      </button>
+                      <button className="btn-ghost px-3 py-2" onClick={() => setEditAccId(null)}>
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* Account row */
+                  <div className="card flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl shrink-0"
+                      style={{ background: `${acc.color}25`, border: `2px solid ${acc.color}50` }}>
+                      <div className="w-full h-full rounded-xl flex items-center justify-center">
+                        <div className="w-3 h-3 rounded-full" style={{ background: acc.color }} />
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold truncate" style={{ color: "var(--text)" }}>
+                        {acc.name}
+                      </p>
+                      <p className="text-xs" style={{ color: "var(--text-3)" }}>
+                        Solde initial : {acc.initialBalance.toLocaleString("fr-FR")} €
+                        {" · "}
+                        {data.transactions.filter(t => t.account === acc.name).length} tx
+                      </p>
+                    </div>
+                    <div className="flex gap-1 shrink-0">
+                      <button onClick={() => handleEditAccount(acc)}
+                        className="p-2 rounded-lg" style={{ background: "var(--surface-2)", color: "var(--blue)" }}>
+                        <Edit2 size={14} />
+                      </button>
+                      <button onClick={() => handleDeleteAccount(acc)}
+                        className="p-2 rounded-lg" style={{ background: "rgba(239,68,68,0.1)", color: "var(--red)" }}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
 
+            {/* Add account form */}
+            {showAddAcc ? (
+              <div className="card space-y-3 fade-up">
+                <p className="text-xs font-semibold" style={{ color: "var(--text-2)" }}>Nouveau compte</p>
+                <div className="flex gap-2">
+                  <input className="input flex-1" value={newAcc.name}
+                    onChange={(e) => setNewAcc(f => ({ ...f, name: e.target.value }))}
+                    placeholder="Nom du compte" autoFocus />
+                  <input className="input w-28" type="number" value={newAcc.initialBalance}
+                    onChange={(e) => setNewAcc(f => ({ ...f, initialBalance: e.target.value }))}
+                    placeholder="Solde init." />
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="flex gap-1.5 flex-wrap flex-1">
+                    {ACCOUNT_COLORS.map((c) => (
+                      <button key={c} onClick={() => setNewAcc(f => ({ ...f, color: c }))}
+                        className="w-6 h-6 rounded-full transition-all"
+                        style={{
+                          background: c,
+                          outline: newAcc.color === c ? `2px solid ${c}` : "none",
+                          outlineOffset: "2px",
+                        }} />
+                    ))}
+                  </div>
+                  <button className="btn-primary px-3 py-2"
+                    onClick={handleAddAccount}
+                    disabled={!newAcc.name.trim()}
+                    style={{ opacity: newAcc.name.trim() ? 1 : 0.4 }}>
+                    <Check size={14} />
+                  </button>
+                  <button className="btn-ghost px-3 py-2" onClick={() => { setShowAddAcc(false); setNewAcc(EMPTY_ACC); }}>
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowAddAcc(true)}
+                className="flex items-center gap-2 w-full py-3 px-4 rounded-xl text-sm font-semibold transition-all"
+                style={{ background: "var(--surface-2)", color: "var(--text-2)", border: "1.5px dashed var(--border)" }}
+              >
+                <Plus size={16} style={{ color: "var(--green)" }} />
+                Ajouter un compte
+              </button>
+            )}
+          </div>
+        </section>
+
+        {/* ── Données ── */}
+        <section className="space-y-2">
+          <p className="text-xs font-bold uppercase tracking-widest px-1" style={{ color: "var(--text-3)" }}>Données</p>
+          <div className="card space-y-0 divide-y divide-gray-800">
             <button onClick={handleExport}
-              className="flex items-center justify-between w-full py-3 first:pt-0 last:pb-0">
+              className="flex items-center justify-between w-full py-3 first:pt-0">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center"
                   style={{ background: "rgba(34,197,94,0.1)" }}>
                   <Download size={15} style={{ color: "var(--green)" }} />
                 </div>
                 <div className="text-left">
-                  <p className="text-sm font-medium" style={{ color: "var(--text)" }}>
-                    Exporter mes données
-                  </p>
-                  <p className="text-xs" style={{ color: "var(--text-3)" }}>
-                    Télécharge un fichier JSON de sauvegarde
-                  </p>
+                  <p className="text-sm font-medium" style={{ color: "var(--text)" }}>Exporter mes données</p>
+                  <p className="text-xs" style={{ color: "var(--text-3)" }}>Télécharge un fichier JSON de sauvegarde</p>
                 </div>
               </div>
               <ChevronRight size={16} style={{ color: "var(--text-3)" }} />
             </button>
-
             <button onClick={handleImport}
-              className="flex items-center justify-between w-full py-3">
+              className="flex items-center justify-between w-full py-3 last:pb-0">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center"
                   style={{ background: "rgba(59,130,246,0.1)" }}>
                   <Upload size={15} style={{ color: "var(--blue)" }} />
                 </div>
                 <div className="text-left">
-                  <p className="text-sm font-medium" style={{ color: "var(--text)" }}>
-                    Restaurer une sauvegarde
-                  </p>
-                  <p className="text-xs" style={{ color: "var(--text-3)" }}>
-                    Importe un fichier JSON exporté précédemment
-                  </p>
+                  <p className="text-sm font-medium" style={{ color: "var(--text)" }}>Restaurer une sauvegarde</p>
+                  <p className="text-xs" style={{ color: "var(--text-3)" }}>Importe un fichier JSON exporté précédemment</p>
                 </div>
               </div>
               <ChevronRight size={16} style={{ color: "var(--text-3)" }} />
             </button>
-
           </div>
         </section>
 
-        {/* Apparence */}
+        {/* ── Apparence ── */}
         <section className="space-y-2">
-          <p className="text-xs font-bold uppercase tracking-widest px-1"
-            style={{ color: "var(--text-3)" }}>Apparence</p>
-
+          <p className="text-xs font-bold uppercase tracking-widest px-1" style={{ color: "var(--text-3)" }}>Apparence</p>
           <div className="card">
-            <button
-              onClick={() => dispatch({ type: "TOGGLE_DARK" })}
-              className="flex items-center justify-between w-full"
-            >
+            <button onClick={() => dispatch({ type: "TOGGLE_DARK" })}
+              className="flex items-center justify-between w-full">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center"
                   style={{ background: "rgba(245,158,11,0.1)" }}>
@@ -120,64 +283,28 @@ export default function Parametres() {
                   <p className="text-sm font-medium" style={{ color: "var(--text)" }}>
                     {data.darkMode ? "Mode sombre actif" : "Mode clair actif"}
                   </p>
-                  <p className="text-xs" style={{ color: "var(--text-3)" }}>
-                    Appuie pour basculer
-                  </p>
+                  <p className="text-xs" style={{ color: "var(--text-3)" }}>Appuie pour basculer</p>
                 </div>
               </div>
-              <div
-                className="w-10 h-6 rounded-full relative transition-all"
-                style={{ background: data.darkMode ? "var(--green)" : "var(--surface-3)" }}
-              >
-                <div
-                  className="w-4 h-4 rounded-full absolute top-1 transition-all"
-                  style={{
-                    background: "white",
-                    left: data.darkMode ? "calc(100% - 1.25rem)" : "0.25rem",
-                  }}
-                />
+              <div className="w-10 h-6 rounded-full relative transition-all"
+                style={{ background: data.darkMode ? "var(--green)" : "var(--surface-3)" }}>
+                <div className="w-4 h-4 rounded-full absolute top-1 transition-all"
+                  style={{ background: "white", left: data.darkMode ? "calc(100% - 1.25rem)" : "0.25rem" }} />
               </div>
             </button>
           </div>
         </section>
-{/* Support */}
+
+        {/* ── Confidentialité ── */}
         <section className="space-y-2">
-          <p className="text-xs font-bold uppercase tracking-widest px-1"
-            style={{ color: "var(--text-3)" }}>Support</p>
-          <div className="card">
-            <Link href="/feedback"
-              className="flex items-center justify-between w-full">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center"
-                  style={{ background: "rgba(96,165,250,0.1)" }}>
-                  <MessageSquare size={15} style={{ color: "var(--blue)" }} />
-                </div>
-                <div className="text-left">
-                  <p className="text-sm font-medium" style={{ color: "var(--text)" }}>
-                    Signaler / Suggérer
-                  </p>
-                  <p className="text-xs" style={{ color: "var(--text-3)" }}>
-                    Bug, idée, question — écris-nous
-                  </p>
-                </div>
-              </div>
-              <ChevronRight size={16} style={{ color: "var(--text-3)" }} />
-            </Link>
-          </div>
-        </section>
-        {/* Confidentialité */}
-        <section className="space-y-2">
-          <p className="text-xs font-bold uppercase tracking-widest px-1"
-            style={{ color: "var(--text-3)" }}>Confidentialité</p>
+          <p className="text-xs font-bold uppercase tracking-widest px-1" style={{ color: "var(--text-3)" }}>Confidentialité</p>
           <div className="card flex items-start gap-3">
             <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
               style={{ background: "rgba(34,197,94,0.1)" }}>
               <Shield size={15} style={{ color: "var(--green)" }} />
             </div>
             <div>
-              <p className="text-sm font-medium" style={{ color: "var(--text)" }}>
-                100% local
-              </p>
+              <p className="text-sm font-medium" style={{ color: "var(--text)" }}>100% local</p>
               <p className="text-xs mt-0.5" style={{ color: "var(--text-3)" }}>
                 Toutes tes données restent sur cet appareil. Aucun serveur, aucune analytics, aucun compte requis.
               </p>
@@ -185,80 +312,73 @@ export default function Parametres() {
           </div>
         </section>
 
-        {/* Zone danger */}
+        {/* ── Support ── */}
         <section className="space-y-2">
-          <p className="text-xs font-bold uppercase tracking-widest px-1"
-            style={{ color: "var(--red)" }}>Zone dangereuse</p>
+          <p className="text-xs font-bold uppercase tracking-widest px-1" style={{ color: "var(--text-3)" }}>Support</p>
+          <div className="card">
+            <Link href="/feedback" className="flex items-center justify-between w-full">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center"
+                  style={{ background: "rgba(96,165,250,0.1)" }}>
+                  <MessageSquare size={15} style={{ color: "var(--blue)" }} />
+                </div>
+                <div className="text-left">
+                  <p className="text-sm font-medium" style={{ color: "var(--text)" }}>Signaler / Suggérer</p>
+                  <p className="text-xs" style={{ color: "var(--text-3)" }}>Bug, idée, question — écris-nous</p>
+                </div>
+              </div>
+              <ChevronRight size={16} style={{ color: "var(--text-3)" }} />
+            </Link>
+          </div>
+        </section>
 
+        {/* ── Zone danger ── */}
+        <section className="space-y-2">
+          <p className="text-xs font-bold uppercase tracking-widest px-1" style={{ color: "var(--red)" }}>Zone dangereuse</p>
           <div className="card space-y-4">
-
             {confirmStep === 0 && (
-              <button
-                onClick={() => setConfirmStep(1)}
-                className="flex items-center justify-between w-full"
-              >
+              <button onClick={() => setConfirmStep(1)}
+                className="flex items-center justify-between w-full">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center"
                     style={{ background: "rgba(239,68,68,0.1)" }}>
                     <RotateCcw size={15} style={{ color: "var(--red)" }} />
                   </div>
                   <div className="text-left">
-                    <p className="text-sm font-medium" style={{ color: "var(--red)" }}>
-                      Réinitialiser l'application
-                    </p>
-                    <p className="text-xs" style={{ color: "var(--text-3)" }}>
-                      Efface toutes les données et repart de zéro
-                    </p>
+                    <p className="text-sm font-medium" style={{ color: "var(--red)" }}>Réinitialiser l'application</p>
+                    <p className="text-xs" style={{ color: "var(--text-3)" }}>Efface toutes les données et repart de zéro</p>
                   </div>
                 </div>
                 <ChevronRight size={16} style={{ color: "var(--red)" }} />
               </button>
             )}
-
             {confirmStep === 1 && (
               <div className="space-y-3 fade-up">
-                <div
-                  className="rounded-xl p-3"
-                  style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}
-                >
-                  <p className="text-sm font-semibold mb-1" style={{ color: "var(--red)" }}>
-                    ⚠️ Cette action est irréversible
-                  </p>
+                <div className="rounded-xl p-3"
+                  style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                  <p className="text-sm font-semibold mb-1" style={{ color: "var(--red)" }}>⚠️ Cette action est irréversible</p>
                   <p className="text-xs" style={{ color: "var(--text-2)" }}>
                     Toutes tes transactions, comptes, objectifs et paramètres seront définitivement supprimés.
-                    L'app repartira comme à la première installation.
                   </p>
                   <p className="text-xs font-semibold mt-2" style={{ color: "var(--amber)" }}>
                     Pense à exporter tes données avant si tu veux les conserver.
                   </p>
                 </div>
                 <div className="flex gap-2">
-                  <button
-                    className="btn-ghost flex-1"
-                    onClick={() => setConfirmStep(0)}
-                  >
-                    Annuler
-                  </button>
-                  <button
-                    className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all active:scale-95"
+                  <button className="btn-ghost flex-1" onClick={() => setConfirmStep(0)}>Annuler</button>
+                  <button className="flex-1 py-2.5 rounded-xl text-sm font-semibold"
                     style={{ background: "rgba(239,68,68,0.15)", color: "var(--red)" }}
-                    onClick={() => setConfirmStep(2)}
-                  >
+                    onClick={() => setConfirmStep(2)}>
                     Continuer →
                   </button>
                 </div>
               </div>
             )}
-
             {confirmStep === 2 && (
               <div className="space-y-3 fade-up">
-                <div
-                  className="rounded-xl p-3"
-                  style={{ background: "rgba(239,68,68,0.12)", border: "1.5px solid rgba(239,68,68,0.35)" }}
-                >
-                  <p className="text-sm font-bold mb-1" style={{ color: "var(--red)" }}>
-                    Dernière confirmation
-                  </p>
+                <div className="rounded-xl p-3"
+                  style={{ background: "rgba(239,68,68,0.12)", border: "1.5px solid rgba(239,68,68,0.35)" }}>
+                  <p className="text-sm font-bold mb-1" style={{ color: "var(--red)" }}>Dernière confirmation</p>
                   <p className="text-xs" style={{ color: "var(--text-2)" }}>
                     {data.transactions.length} transaction{data.transactions.length > 1 ? "s" : ""},{" "}
                     {data.accounts.length} compte{data.accounts.length > 1 ? "s" : ""} et{" "}
@@ -266,25 +386,18 @@ export default function Parametres() {
                   </p>
                 </div>
                 <div className="flex gap-2">
-                  <button className="btn-ghost flex-1" onClick={() => setConfirmStep(0)}>
-                    Annuler
-                  </button>
-                  <button
-                    className="flex-1 py-2.5 rounded-xl text-sm font-bold transition-all active:scale-95 flex items-center justify-center gap-2"
+                  <button className="btn-ghost flex-1" onClick={() => setConfirmStep(0)}>Annuler</button>
+                  <button className="flex-1 py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2"
                     style={{ background: "var(--red)", color: "white" }}
-                    onClick={handleReset}
-                  >
-                    <Trash2 size={14} />
-                    Tout effacer
+                    onClick={handleReset}>
+                    <Trash2 size={14} /> Tout effacer
                   </button>
                 </div>
               </div>
             )}
-
           </div>
         </section>
 
-        {/* Version */}
         <p className="text-center text-xs pb-2" style={{ color: "var(--text-3)" }}>
           EconoMind — Investir mieux
         </p>
