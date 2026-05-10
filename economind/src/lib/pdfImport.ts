@@ -5,8 +5,6 @@ declare global {
   interface Window { pdfjsLib: any; }
 }
 
-// ─── pdf.js loader ────────────────────────────────────────────────────────────
-
 async function loadPdfJs(): Promise<any> {
   if (typeof window === "undefined") throw new Error("Client only");
   if (window.pdfjsLib) return window.pdfjsLib;
@@ -23,8 +21,6 @@ async function loadPdfJs(): Promise<any> {
   });
 }
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
 interface TextItem {
   text: string;
   x: number;
@@ -32,14 +28,11 @@ interface TextItem {
   width: number;
 }
 
-// ─── Extract positioned items ─────────────────────────────────────────────────
-
 async function extractItems(file: File): Promise<TextItem[][]> {
   const pdfjsLib = await loadPdfJs();
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   const allPages: TextItem[][] = [];
-
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
@@ -56,67 +49,78 @@ async function extractItems(file: File): Promise<TextItem[][]> {
   return allPages;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function isDate(s: string): boolean {
-  return /^\d{2}\/\d{2}\/\d{4}$/.test(s);
-}
-
+function isDate(s: string): boolean { return /^\d{2}\/\d{2}\/\d{4}$/.test(s); }
 function parseDate(s: string): string {
-  const [d, m, y] = s.split("/");
-  return `${y}-${m}-${d}`;
+  const [d, m, y] = s.split("/"); return `${y}-${m}-${d}`;
 }
-
 function isAmount(s: string): boolean {
   return /^\d[\d.]*,\d{2}$/.test(s.replace(/\s/g, ""));
 }
-
 function parseAmount(s: string): number {
-  return parseFloat(
-    s.replace(/\s/g, "").replace(/\./g, "").replace(",", ".")
-  );
+  return parseFloat(s.replace(/\s/g, "").replace(/\./g, "").replace(",", "."));
 }
 
-// Group items into rows by Y coordinate
 function groupByY(items: TextItem[], tolerance = 4): Map<number, TextItem[]> {
   const rows = new Map<number, TextItem[]>();
-  // Work in PDF coords (y increases upward), so we snap
   for (const item of items) {
     const snap = Math.round(item.y / tolerance) * tolerance;
     let found = false;
     for (const [ky] of rows) {
-      if (Math.abs(ky - snap) <= tolerance) {
-        rows.get(ky)!.push(item);
-        found = true;
-        break;
-      }
+      if (Math.abs(ky - snap) <= tolerance) { rows.get(ky)!.push(item); found = true; break; }
     }
     if (!found) rows.set(snap, [item]);
   }
-  // Sort each row left to right
   for (const [, row] of rows) row.sort((a, b) => a.x - b.x);
   return rows;
 }
 
-// Add spaces between label words based on x-gap heuristic
 function joinWithSpaces(items: TextItem[]): string {
   if (items.length === 0) return "";
   let result = items[0].text;
   for (let i = 1; i < items.length; i++) {
     const gap = items[i].x - (items[i - 1].x + items[i - 1].width);
-    // If gap > 2pt, add a space
     result += (gap > 2 ? " " : "") + items[i].text;
   }
   return result.trim();
 }
 
+// ─── Opening balance detection ────────────────────────────────────────────────
+
+function detectOpeningBalance(pages: TextItem[][]): number | null {
+  for (const pageItems of pages) {
+    const allText = pageItems.map(i => i.text).join(" ");
+
+    // Pattern: SOLDEAU: dd/mm/yyyy amount  (BoursoBank)
+    const match = allText.match(/SOLDEAU\s*:?\s*\d{2}\/\d{2}\/\d{4}\s+([\d.,]+)/i)
+      || allText.match(/SOLDE\s+AU\s*:?\s*\d{2}\/\d{2}\/\d{4}\s+([\d.,]+)/i)
+      || allText.match(/solde\s+précédent\s*:?\s*([\d.,]+)/i)
+      || allText.match(/old\s+balance\s*:?\s*([\d.,]+)/i)
+      || allText.match(/solde\s+initial\s*:?\s*([\d.,]+)/i);
+
+    if (match) {
+      const raw = match[1];
+      const val = parseFloat(raw.replace(/\s/g, "").replace(/\./g, "").replace(",", "."));
+      if (!isNaN(val)) return val;
+    }
+
+    // Positional: look for row with "SOLDE" + amount in credit column (last page)
+    const rows = groupByY(pageItems, 4);
+    const sortedYs = Array.from(rows.keys()).sort((a, b) => b - a);
+    for (const y of sortedYs) {
+      const row = rows.get(y)!;
+      const texts = row.map(i => i.text);
+      const hasSolde = texts.some(t => t.toUpperCase().includes("SOLDE"));
+      const amounts = row.filter(i => isAmount(i.text));
+      if (hasSolde && amounts.length > 0) {
+        const val = parseAmount(amounts[amounts.length - 1].text);
+        if (val > 0) return val;
+      }
+    }
+  }
+  return null;
+}
+
 // ─── BoursoBank parser ────────────────────────────────────────────────────────
-// Columns (PDF units, from calibration):
-//   Date opération : x ≈ 46
-//   Libellé        : 80 < x < ~370
-//   Valeur (date)  : x ≈ 375–385
-//   Débit          : x ≈ 440–465
-//   Crédit         : x ≈ 505–540
 
 function parseBoursobank(
   pages: TextItem[][],
@@ -126,87 +130,45 @@ function parseBoursobank(
   const transactions: Transaction[] = [];
 
   for (const pageItems of pages) {
-    // Detect column positions from header row
-    let debitX = 441;
-    let creditX = 506;
-    let valeurX = 381;
-
+    let debitX = 441, creditX = 506, valeurX = 381;
     for (const item of pageItems) {
       if (item.text === "Débit" || item.text === "DØbit") debitX = item.x;
       else if (item.text === "Crédit" || item.text === "CrØdit") creditX = item.x;
       else if (item.text === "Valeur") valeurX = item.x;
     }
 
-    const COL_TOLERANCE = 40; // px tolerance for column matching
+    const COL_TOLERANCE = 40;
     const DATE_MAX_X = valeurX - 100;
-
     const rows = groupByY(pageItems, 4);
-    // Sort rows top-to-bottom (PDF y increases upward, so descending y = top-to-bottom)
     const sortedYs = Array.from(rows.keys()).sort((a, b) => b - a);
 
     for (const y of sortedYs) {
       const row = rows.get(y)!;
-
-      // Date opération: leftmost, x < DATE_MAX_X, matches dd/mm/yyyy
       const dateItem = row.find(i => i.x < DATE_MAX_X && isDate(i.text));
-
-      // Amounts in debit or credit columns
-      const debitItem = row.find(
-        i => isAmount(i.text) && Math.abs(i.x - debitX) < COL_TOLERANCE
-      );
-      const creditItem = row.find(
-        i => isAmount(i.text) && Math.abs(i.x - creditX) < COL_TOLERANCE
-      );
+      const debitItem = row.find(i => isAmount(i.text) && Math.abs(i.x - debitX) < COL_TOLERANCE);
+      const creditItem = row.find(i => isAmount(i.text) && Math.abs(i.x - creditX) < COL_TOLERANCE);
 
       if (!dateItem || (!debitItem && !creditItem)) continue;
 
-      // Label: items between label start (x≈80) and valeur column
       const labelItems = row.filter(
-        i =>
-          i.x >= 75 &&
-          i.x < valeurX - 5 &&
-          !isDate(i.text) &&
-          !isAmount(i.text)
+        i => i.x >= 75 && i.x < valeurX - 5 && !isDate(i.text) && !isAmount(i.text)
       );
-
       const rawLabel = joinWithSpaces(labelItems);
-
-      // Skip header and balance rows
-      if (
-        !rawLabel ||
-        rawLabel.includes("SOLDE") ||
-        rawLabel === "Libellé" ||
-        rawLabel === "LibellØ"
-      ) continue;
+      if (!rawLabel || rawLabel.includes("SOLDE") || rawLabel === "Libellé" || rawLabel === "LibellØ") continue;
 
       const date = parseDate(dateItem.text);
-      const amount = creditItem
-        ? parseAmount(creditItem.text)
-        : -parseAmount(debitItem!.text);
-
-      // Clean label: remove reference codes
-      const cleanLabel = rawLabel
-        .replace(/\s*Rèf\s*:?\s*\S+/gi, "")
-        .replace(/\s*RUM\s+\S+/gi, "")
-        .replace(/\s{2,}/g, " ")
-        .trim();
-
+      const amount = creditItem ? parseAmount(creditItem.text) : -parseAmount(debitItem!.text);
+      const cleanLabel = rawLabel.replace(/\s*Rèf\s*:?\s*\S+/gi, "").replace(/\s*RUM\s+\S+/gi, "").replace(/\s{2,}/g, " ").trim();
       if (!cleanLabel) continue;
 
       transactions.push({
-        id: generateId(),
-        date,
-        label: cleanLabel,
-        amount,
+        id: generateId(), date, label: cleanLabel, amount,
         category: autoCategory(cleanLabel, rules),
-        account: accountName,
-        source: "pdf",
-        createdAt: Date.now(),
+        account: accountName, source: "pdf", createdAt: Date.now(),
       });
     }
   }
 
-  // Remove duplicates (same date + amount + label start)
   const seen = new Set<string>();
   return transactions.filter(t => {
     const key = `${t.date}|${t.amount}|${t.label.slice(0, 15)}`;
@@ -216,48 +178,28 @@ function parseBoursobank(
   });
 }
 
-// ─── Generic fallback ─────────────────────────────────────────────────────────
-
-function parseGeneric(
-  pages: TextItem[][],
-  accountName: string,
-  rules: CategoryRule[]
-): Transaction[] {
+function parseGeneric(pages: TextItem[][], accountName: string, rules: CategoryRule[]): Transaction[] {
   const transactions: Transaction[] = [];
-
   for (const pageItems of pages) {
     const rows = groupByY(pageItems, 4);
     const sortedYs = Array.from(rows.keys()).sort((a, b) => b - a);
-
     for (const y of sortedYs) {
       const row = rows.get(y)!;
       const dateItem = row.find(i => isDate(i.text) && i.x < 100);
       if (!dateItem) continue;
-
       const amounts = row.filter(i => isAmount(i.text));
       if (amounts.length === 0) continue;
-
-      const labelItems = row.filter(
-        i => !isDate(i.text) && !isAmount(i.text) && i.x > 60
-      );
+      const labelItems = row.filter(i => !isDate(i.text) && !isAmount(i.text) && i.x > 60);
       const label = joinWithSpaces(labelItems) || "Transaction";
-      const amount = -parseAmount(amounts[amounts.length - 1].text);
-
       if (label.includes("SOLDE") || label === "Libellé") continue;
-
       transactions.push({
-        id: generateId(),
-        date: parseDate(dateItem.text),
-        label,
-        amount,
+        id: generateId(), date: parseDate(dateItem.text), label,
+        amount: -parseAmount(amounts[amounts.length - 1].text),
         category: autoCategory(label, rules),
-        account: accountName,
-        source: "pdf",
-        createdAt: Date.now(),
+        account: accountName, source: "pdf", createdAt: Date.now(),
       });
     }
   }
-
   const seen = new Set<string>();
   return transactions.filter(t => {
     const key = `${t.date}|${t.amount}|${t.label.slice(0, 15)}`;
@@ -266,8 +208,6 @@ function parseGeneric(
     return true;
   });
 }
-
-// ─── Bank detection ───────────────────────────────────────────────────────────
 
 function detectBank(pages: TextItem[][]): string {
   const text = pages[0]?.map(i => i.text).join(" ").toLowerCase() || "";
@@ -281,18 +221,22 @@ function detectBank(pages: TextItem[][]): string {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+export interface PDFImportResult {
+  transactions: Transaction[];
+  openingBalance: number | null; // detected from PDF
+}
+
 export async function parsePDF(
   file: File,
   accountName: string,
   rules: CategoryRule[]
-): Promise<Transaction[]> {
+): Promise<PDFImportResult> {
   const pages = await extractItems(file);
   const bank = detectBank(pages);
 
-  const transactions =
-    bank === "boursobank"
-      ? parseBoursobank(pages, accountName, rules)
-      : parseGeneric(pages, accountName, rules);
+  const transactions = bank === "boursobank"
+    ? parseBoursobank(pages, accountName, rules)
+    : parseGeneric(pages, accountName, rules);
 
   if (transactions.length === 0) {
     throw new Error(
@@ -300,5 +244,7 @@ export async function parsePDF(
     );
   }
 
-  return transactions;
+  const openingBalance = detectOpeningBalance(pages);
+
+  return { transactions, openingBalance };
 }
