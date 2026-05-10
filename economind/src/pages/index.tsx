@@ -3,13 +3,9 @@ import React, { useMemo } from "react";
 import Layout from "@/components/Layout";
 import { useApp } from "@/context/AppContext";
 import {
-  computeMonthStats,
-  getCurrentMonth,
-  formatEur,
-  generateSuggestions,
-  computeProjection,
-  computeAccountBalance,
-  getLast6Months,
+  computeMonthStats, getCurrentMonth, formatEur,
+  generateSuggestions, computeProjection,
+  computeAccountBalance, getLast6Months,
 } from "@/lib/analytics";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip,
@@ -24,12 +20,33 @@ const PIE_COLORS = [
   "#8b5cf6","#06b6d4","#ec4899","#10b981",
 ];
 
-// Smart label: show first 2 words, max 12 chars
 function shortName(name: string): string {
   const words = name.trim().split(/\s+/);
   if (words.length === 1) return words[0].slice(0, 12);
   const two = words.slice(0, 2).join(" ");
   return two.length > 14 ? words[0].slice(0, 12) : two;
+}
+
+// Reusable clickable section header
+function SectionHeader({ title, href }: { title: string; href: string }) {
+  return (
+    <Link href={href} className="flex items-center justify-between mb-3 group">
+      <p className="section-title">{title}</p>
+      <ChevronRight size={16} className="opacity-40 group-hover:opacity-80 transition-opacity"
+        style={{ color: "var(--text-3)" }} />
+    </Link>
+  );
+}
+
+// Clickable card wrapper
+function ClickCard({ href, children, className = "" }: {
+  href: string; children: React.ReactNode; className?: string;
+}) {
+  return (
+    <Link href={href} className={`card block active:scale-[0.99] transition-transform ${className}`}>
+      {children}
+    </Link>
+  );
 }
 
 export default function Dashboard() {
@@ -40,26 +57,22 @@ export default function Dashboard() {
     () => computeMonthStats(data.transactions, currentMonth),
     [data.transactions, currentMonth]
   );
-
   const suggestions = useMemo(
     () => generateSuggestions(data.transactions, currentMonth),
     [data.transactions, currentMonth]
   );
-
   const projection = useMemo(
     () => computeProjection(data.transactions, 6),
     [data.transactions]
   );
-
   const last6 = useMemo(() => getLast6Months(), []);
   const monthlyData = useMemo(
     () => last6.map((m) => {
       const s = computeMonthStats(data.transactions, m);
-      return { name: m.slice(5), revenus: s.income, dépenses: s.expenses, solde: s.balance };
+      return { name: m.slice(5), revenus: s.income, dépenses: s.expenses };
     }),
     [data.transactions, last6]
   );
-
   const accountStats = useMemo(
     () => data.accounts.map((acc) => ({
       ...acc,
@@ -67,12 +80,10 @@ export default function Dashboard() {
     })),
     [data.accounts, data.transactions]
   );
-
   const alerts = useMemo(() => {
     const a: string[] = [];
     accountStats.forEach((acc) => {
-      if (acc.balance < 0)
-        a.push(`🔴 ${acc.name} est en négatif (${formatEur(acc.balance)})`);
+      if (acc.balance < 0) a.push(`🔴 ${acc.name} est en négatif (${formatEur(acc.balance)})`);
     });
     if (stats.expenses > stats.income * 0.9 && stats.income > 0)
       a.push("🟠 Dépenses proches du revenu ce mois-ci");
@@ -80,33 +91,36 @@ export default function Dashboard() {
       a.push("🔴 Taux d'épargne très faible ce mois");
     return a.slice(0, 3);
   }, [accountStats, stats]);
-
-  // Pie — exclude transfer categories
-  const pieData = useMemo(() => {
-    return Object.entries(stats.byCategory)
+  const pieData = useMemo(
+    () => Object.entries(stats.byCategory)
       .filter(([cat, v]) => v > 0 && !isTransferCategory(cat))
       .sort((a, b) => b[1] - a[1])
       .slice(0, 8)
-      .map(([name, value]) => ({ name, value }));
-  }, [stats.byCategory]);
+      .map(([name, value]) => ({ name, value })),
+    [stats.byCategory]
+  );
 
   const budgetNeeds   = stats.income * (data.budgetRule.needs / 100);
   const budgetWants   = stats.income * (data.budgetRule.wants / 100);
   const budgetSavings = stats.income * (data.budgetRule.savings / 100);
-
   const hasData = data.transactions.length > 0 || data.accounts.some(a => a.initialBalance > 0);
 
   return (
     <Layout>
       <div className="px-4 pt-4 space-y-4 animate-stagger">
 
-        {/* Hero */}
-        <div className="rounded-2xl p-5 relative overflow-hidden" style={{ background: "var(--surface)" }}>
+        {/* Hero → Transactions */}
+        <Link href="/transactions"
+          className="rounded-2xl p-5 relative overflow-hidden block active:scale-[0.99] transition-transform"
+          style={{ background: "var(--surface)" }}>
           <div className="absolute inset-0 opacity-5"
             style={{ background: "radial-gradient(ellipse at top right, var(--green), transparent)" }} />
-          <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: "var(--text-3)" }}>
-            Reste à vivre — {currentMonth.replace("-", " / ")}
-          </p>
+          <div className="flex items-start justify-between">
+            <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: "var(--text-3)" }}>
+              Reste à vivre — {currentMonth.replace("-", " / ")}
+            </p>
+            <ChevronRight size={15} className="opacity-30" style={{ color: "var(--text-3)" }} />
+          </div>
           <p className="text-4xl font-bold stat-value mb-2"
             style={{ color: stats.balance >= 0 ? "var(--green)" : "var(--red)" }}>
             {formatEur(stats.balance)}
@@ -138,7 +152,7 @@ export default function Dashboard() {
                 : "Aucun revenu"}
             </span>
           </div>
-        </div>
+        </Link>
 
         {/* Empty state */}
         {!hasData && (
@@ -155,29 +169,33 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Alerts */}
+        {/* Alerts → Transactions */}
         {alerts.length > 0 && (
-          <div className="rounded-2xl p-4 space-y-2"
+          <Link href="/transactions"
+            className="rounded-2xl p-4 space-y-2 block active:scale-[0.99] transition-transform"
             style={{ background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.2)" }}>
-            <p className="text-xs font-bold uppercase tracking-wider" style={{ color: "var(--amber)" }}>
-              ⚠️ Points importants
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold uppercase tracking-wider" style={{ color: "var(--amber)" }}>
+                ⚠️ Points importants
+              </p>
+              <ChevronRight size={14} style={{ color: "var(--amber)", opacity: 0.5 }} />
+            </div>
             {alerts.map((a, i) => (
               <p key={i} className="text-sm" style={{ color: "var(--text-2)" }}>{a}</p>
             ))}
-          </div>
+          </Link>
         )}
 
-        {/* Comptes */}
+        {/* Comptes → Paramètres */}
         <div>
-          <div className="flex items-center justify-between mb-3">
-            <p className="section-title">Comptes</p>
-          </div>
+          <SectionHeader title="Comptes" href="/parametres" />
           <div className="grid grid-cols-2 gap-2">
             {accountStats.map((acc) => {
               const status = acc.balance < 0 ? "🔴" : acc.balance < 200 ? "🟠" : "🟢";
               return (
-                <div key={acc.id} className="rounded-xl p-3" style={{ background: "var(--surface-2)" }}>
+                <Link key={acc.id} href="/parametres"
+                  className="rounded-xl p-3 block active:scale-[0.99] transition-transform"
+                  style={{ background: "var(--surface-2)" }}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[11px] font-medium truncate" style={{ color: "var(--text-2)" }}>
                       {shortName(acc.name)}
@@ -188,18 +206,19 @@ export default function Dashboard() {
                     style={{ color: acc.balance < 0 ? "var(--red)" : "var(--text)" }}>
                     {formatEur(acc.balance)}
                   </p>
-                </div>
+                </Link>
               );
             })}
           </div>
         </div>
 
-        {/* Budget */}
+        {/* Budget → Analyse */}
         {hasData && (
-          <div className="card">
-            <p className="section-title mb-3">
-              Budget {data.budgetRule.mode === "503020" ? "50/30/20" : "Personnalisé"}
-            </p>
+          <ClickCard href="/analyse">
+            <SectionHeader
+              title={`Budget ${data.budgetRule.mode === "503020" ? "50/30/20" : "Personnalisé"}`}
+              href="/analyse"
+            />
             {[
               { label: "Besoins", budget: budgetNeeds, actual: stats.expenses * 0.7, pct: data.budgetRule.needs },
               { label: "Envies",  budget: budgetWants, actual: stats.expenses * 0.2, pct: data.budgetRule.wants },
@@ -211,7 +230,7 @@ export default function Dashboard() {
                 <div key={label} className="mb-3 last:mb-0">
                   <div className="flex justify-between text-xs mb-1" style={{ color: "var(--text-2)" }}>
                     <span className="font-semibold">{label} ({pct}%)</span>
-                    <span className={over ? "text-red-400 font-bold" : ""}>
+                    <span className={over ? "font-bold" : ""} style={{ color: over ? "var(--red)" : undefined }}>
                       {formatEur(actual)} / {formatEur(budget)}
                     </span>
                   </div>
@@ -222,13 +241,13 @@ export default function Dashboard() {
                 </div>
               );
             })}
-          </div>
+          </ClickCard>
         )}
 
-        {/* Chart */}
+        {/* Chart → Analyse */}
         {hasData && (
-          <div className="card">
-            <p className="section-title mb-3">Évolution 6 mois</p>
+          <ClickCard href="/analyse">
+            <SectionHeader title="Évolution 6 mois" href="/analyse" />
             <ResponsiveContainer width="100%" height={160}>
               <AreaChart data={monthlyData} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
                 <defs>
@@ -251,13 +270,13 @@ export default function Dashboard() {
                 <Area type="monotone" dataKey="dépenses" stroke="#ef4444" strokeWidth={2} fill="url(#gExpense)" />
               </AreaChart>
             </ResponsiveContainer>
-          </div>
+          </ClickCard>
         )}
 
-        {/* Pie */}
+        {/* Pie → Analyse */}
         {pieData.length > 0 && (
-          <div className="card">
-            <p className="section-title mb-3">Répartition dépenses</p>
+          <ClickCard href="/analyse">
+            <SectionHeader title="Répartition dépenses" href="/analyse" />
             <div className="flex gap-4 items-center">
               <PieChart width={120} height={120}>
                 <Pie data={pieData} cx={55} cy={55} innerRadius={30} outerRadius={55} dataKey="value" strokeWidth={0}>
@@ -278,14 +297,14 @@ export default function Dashboard() {
                 ))}
               </div>
             </div>
-          </div>
+          </ClickCard>
         )}
 
-        {/* Projection */}
+        {/* Projection → Analyse */}
         {hasData && projection.length > 0 && (
-          <div className="card">
-            <div className="flex items-center justify-between mb-3">
-              <p className="section-title">Projection 6 mois</p>
+          <ClickCard href="/analyse">
+            <div className="flex items-center justify-between mb-1">
+              <SectionHeader title="Projection 6 mois" href="/analyse" />
               {projection[5].cumulative > 0
                 ? <TrendingUp size={18} style={{ color: "var(--green)" }} />
                 : <TrendingDown size={18} style={{ color: "var(--red)" }} />}
@@ -310,13 +329,13 @@ export default function Dashboard() {
                 );
               })}
             </div>
-          </div>
+          </ClickCard>
         )}
 
-        {/* Recommandations */}
+        {/* Recommandations → Analyse */}
         {suggestions.length > 0 && (
-          <div className="card">
-            <p className="section-title mb-3">💡 Recommandations</p>
+          <ClickCard href="/analyse">
+            <SectionHeader title="💡 Recommandations" href="/analyse" />
             <div className="space-y-3">
               {suggestions.map((s, i) => (
                 <div key={i} className="flex gap-3 items-start p-3 rounded-xl" style={{ background: "var(--surface-2)" }}>
@@ -328,16 +347,18 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
-          </div>
+          </ClickCard>
         )}
 
         {/* Quick links */}
         <div className="grid grid-cols-2 gap-2 pb-2">
-          <Link href="/transactions" className="card flex items-center justify-between p-4 active:scale-95 transition-transform">
+          <Link href="/transactions"
+            className="card flex items-center justify-between p-4 active:scale-95 transition-transform">
             <span className="text-sm font-semibold" style={{ color: "var(--text)" }}>Transactions</span>
             <ChevronRight size={16} style={{ color: "var(--text-3)" }} />
           </Link>
-          <Link href="/objectifs" className="card flex items-center justify-between p-4 active:scale-95 transition-transform">
+          <Link href="/objectifs"
+            className="card flex items-center justify-between p-4 active:scale-95 transition-transform">
             <span className="text-sm font-semibold" style={{ color: "var(--text)" }}>Objectifs</span>
             <ChevronRight size={16} style={{ color: "var(--text-3)" }} />
           </Link>
