@@ -142,6 +142,29 @@ export default function Transactions() {
     transfer: data.transactions.filter(t => isTransferCategory(t.category)).length,
   }), [data.transactions]);
 
+  // Group filtered transactions by month
+  const groupedByMonth = useMemo(() => {
+    const groups: { month: string; label: string; transactions: Transaction[]; income: number; expenses: number }[] = [];
+    const seen = new Map<string, number>();
+    for (const tx of filtered) {
+      const month = tx.date.slice(0, 7);
+      if (!seen.has(month)) {
+        const [y, m] = month.split("-");
+        const label = new Date(parseInt(y), parseInt(m) - 1, 1)
+          .toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+        seen.set(month, groups.length);
+        groups.push({ month, label, transactions: [], income: 0, expenses: 0 });
+      }
+      const idx = seen.get(month)!;
+      groups[idx].transactions.push(tx);
+      if (!isTransferCategory(tx.category)) {
+        if (tx.amount > 0) groups[idx].income += tx.amount;
+        else groups[idx].expenses += Math.abs(tx.amount);
+      }
+    }
+    return groups;
+  }, [filtered]);
+
   // Accounts available as destination (exclude source)
   const toAccounts = accountNames.filter(a => a !== form.account);
 
@@ -363,20 +386,43 @@ export default function Transactions() {
           </select>
         </div>
 
-        {/* List */}
-        <div className="space-y-2 pb-4">
-          {filtered.length === 0 ? (
+        {/* List grouped by month */}
+        <div className="space-y-4 pb-4">
+          {groupedByMonth.length === 0 ? (
             <div className="text-center py-12" style={{ color: "var(--text-3)" }}>
               <p className="text-4xl mb-2">🔍</p>
               <p className="text-sm">Aucune transaction trouvée</p>
             </div>
-          ) : (
-            filtered.map((tx) => (
-              <TxRow key={tx.id} tx={tx}
-                onEdit={() => startEdit(tx)}
-                onDelete={() => deleteTransaction(tx.id)} />
-            ))
-          )}
+          ) : groupedByMonth.map((group) => (
+            <div key={group.month}>
+              {/* Month header */}
+              <div className="flex items-center justify-between px-1 mb-2">
+                <p className="text-xs font-bold uppercase tracking-wider capitalize"
+                  style={{ color: "var(--text-2)" }}>
+                  {group.label}
+                </p>
+                <div className="flex items-center gap-3 text-xs font-mono">
+                  {group.income > 0 && (
+                    <span style={{ color: "var(--green)" }}>+{formatEur(group.income)}</span>
+                  )}
+                  {group.expenses > 0 && (
+                    <span style={{ color: "var(--red)" }}>-{formatEur(group.expenses)}</span>
+                  )}
+                  <span className="text-[10px]" style={{ color: "var(--text-3)" }}>
+                    {group.transactions.length} op.
+                  </span>
+                </div>
+              </div>
+              {/* Transactions */}
+              <div className="space-y-1.5">
+                {group.transactions.map((tx) => (
+                  <TxRow key={tx.id} tx={tx}
+                    onEdit={() => startEdit(tx)}
+                    onDelete={() => deleteTransaction(tx.id)} />
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </Layout>
