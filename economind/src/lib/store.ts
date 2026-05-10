@@ -93,7 +93,7 @@ export const DEFAULT_CATEGORIES = [
   ...TRANSFER_CATEGORIES,
 ];
 
-const DEFAULT_CATEGORY_RULES: CategoryRule[] = [
+export const DEFAULT_CATEGORY_RULES: CategoryRule[] = [
   // Logement
   { keyword: "loyer", category: "Logement" },
   { keyword: "edf", category: "Logement" },
@@ -167,7 +167,20 @@ export function loadData(): AppData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return getDefaultData();
     const parsed = JSON.parse(raw) as AppData;
-    return { ...getDefaultData(), ...parsed };
+    const defaults = getDefaultData();
+
+    // Merge default category rules with user-learned rules
+    // Default rules are always present; user rules (learned corrections) are added on top
+    const userLearnedRules = (parsed.categoryRules || []).filter(
+      (r) => !DEFAULT_CATEGORY_RULES.some((d) => d.keyword === r.keyword)
+    );
+    const mergedRules = [...userLearnedRules, ...DEFAULT_CATEGORY_RULES];
+
+    return {
+      ...defaults,
+      ...parsed,
+      categoryRules: mergedRules,
+    };
   } catch {
     return getDefaultData();
   }
