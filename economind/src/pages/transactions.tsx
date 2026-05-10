@@ -31,6 +31,8 @@ export default function Transactions() {
   const [search, setSearch] = useState("");
   const [filterAccount, setFilterAccount] = useState("all");
   const [filterType, setFilterType] = useState("all");
+  const [deletedTx, setDeletedTx] = useState<Transaction | null>(null);
+  const [undoTimer, setUndoTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
 
   const accountNames = useMemo(() => data.accounts.map((a) => a.name), [data.accounts]);
 
@@ -123,6 +125,33 @@ export default function Transactions() {
     });
     setEditId(tx.id);
     setShowForm(true);
+    // Scroll to top so the form is visible
+    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 50);
+  };
+
+  const handleSoftDelete = (tx: Transaction) => {
+    // Remove immediately from UI
+    deleteTransaction(tx.id);
+    // Store for undo
+    setDeletedTx(tx);
+    // Clear any existing timer (new delete replaces previous)
+    if (undoTimer) clearTimeout(undoTimer);
+    setUndoTimer(null);
+  };
+
+  const handleUndoDelete = () => {
+    if (!deletedTx) return;
+    if (undoTimer) clearTimeout(undoTimer);
+    addTransaction({
+      date: deletedTx.date,
+      label: deletedTx.label,
+      amount: deletedTx.amount,
+      category: deletedTx.category,
+      account: deletedTx.account,
+      source: deletedTx.source,
+    });
+    setDeletedTx(null);
+    setUndoTimer(null);
   };
 
   const filtered = useMemo(() => {
@@ -386,6 +415,28 @@ export default function Transactions() {
           </select>
         </div>
 
+        {/* Undo delete toast */}
+        {deletedTx && (
+          <div
+            className="fixed bottom-20 left-4 right-4 z-50 flex items-center justify-between px-4 py-3 rounded-2xl shadow-lg fade-up"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-base">🗑️</span>
+              <p className="text-xs truncate" style={{ color: "var(--text-2)" }}>
+                <span className="font-semibold" style={{ color: "var(--text)" }}>{deletedTx.label}</span> supprimée
+              </p>
+            </div>
+            <button
+              onClick={handleUndoDelete}
+              className="shrink-0 ml-3 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95"
+              style={{ background: "rgba(34,197,94,0.15)", color: "var(--green)" }}
+            >
+              Annuler
+            </button>
+          </div>
+        )}
+
         {/* List grouped by month */}
         <div className="space-y-4 pb-4">
           {groupedByMonth.length === 0 ? (
@@ -418,7 +469,7 @@ export default function Transactions() {
                 {group.transactions.map((tx) => (
                   <TxRow key={tx.id} tx={tx}
                     onEdit={() => startEdit(tx)}
-                    onDelete={() => deleteTransaction(tx.id)} />
+                    onDelete={() => handleSoftDelete(tx)} />
                 ))}
               </div>
             </div>
@@ -488,7 +539,7 @@ function TxRow({ tx, onEdit, onDelete }: {
             style={{ background: "rgba(239,68,68,0.1)", color: "var(--red)" }}
             onClick={(e) => {
               e.stopPropagation();
-              if (confirm("Supprimer cette transaction ?")) onDelete();
+              onDelete();
             }}>
             <Trash2 size={13} />
           </button>
