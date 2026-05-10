@@ -2,13 +2,14 @@
 import React, { useState, useRef } from "react";
 import Layout from "@/components/Layout";
 import { useApp } from "@/context/AppContext";
-import { parseCSV, replaceMonthWithCSV } from "@/lib/csvImport";
+import { parseCSV } from "@/lib/csvImport";
 import { parsePDF } from "@/lib/pdfImport";
 import { detectDuplicates, DuplicateResult, formatEur } from "@/lib/analytics";
 import { Transaction } from "@/lib/store";
+import { replaceMonthWithCSV } from "@/lib/csvImport";
 import {
   Upload, FileText, AlertTriangle, Check, X,
-  FileSpreadsheet, RotateCcw, Clock,
+  FileSpreadsheet, RotateCcw, Clock, Info,
 } from "lucide-react";
 
 type Step = "idle" | "preview" | "duplicates" | "done";
@@ -25,11 +26,14 @@ export default function Import() {
   const [error, setError] = useState("");
   const [fileType, setFileType] = useState<FileType>("csv");
   const [fileName, setFileName] = useState("");
-  const [showUndo, setShowUndo] = useState(false);
+  const [openingBalance, setOpeningBalance] = useState<number | null>(null);
+  const [updateBalance, setUpdateBalance] = useState(true);
   const [resolvedDuplicates, setResolvedDuplicates] = useState<{
     [key: string]: "keep" | "replace" | "skip";
   }>({});
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const selectedAccountObj = data.accounts.find(a => a.name === selectedAccount);
 
   const handleFile = async (file: File) => {
     setLoading(true);
@@ -39,17 +43,29 @@ export default function Import() {
     setFileName(file.name);
 
     try {
-      let parsed: Transaction[];
+      let transactions: Transaction[];
+      let detectedBalance: number | null = null;
+
       if (isPDF) {
-        parsed = await parsePDF(file, selectedAccount, data.categoryRules);
+        const result = await parsePDF(file, selectedAccount, data.categoryRules);
+        transactions = result.transactions;
+        detectedBalance = result.openingBalance;
       } else {
-        parsed = await parseCSV(file, selectedAccount, data.categoryRules);
+        const result = await parseCSV(file, selectedAccount, data.categoryRules);
+        transactions = result.transactions;
+        detectedBalance = result.openingBalance;
       }
-      const { toAdd: clean, duplicates: dups } = detectDuplicates(parsed, data.transactions);
-      const toResolve = dups.filter((d) => d.level !== "auto");
-      setPreview(parsed);
+
+      const { toAdd: clean, duplicates: dups } = detectDuplicates(transactions, data.transactions);
+      setPreview(transactions);
       setToAdd(clean);
-      setDuplicates(toResolve);
+      setDuplicates(dups.filter(d => d.level !== "auto"));
+      setOpeningBalance(detectedBalance);
+      setUpdateBalance(
+        detectedBalance !== null &&
+        selectedAccountObj !== undefined &&
+        selectedAccountObj.initialBalance === 0
+      );
       setStep("preview");
     } catch (e: any) {
       setError(e.message || "Erreur lors de l'import");
@@ -64,10 +80,7 @@ export default function Import() {
   };
 
   const handleConfirmImport = () => {
-    if (duplicates.length > 0) {
-      setStep("duplicates");
-      return;
-    }
+    if (duplicates.length > 0) { setStep("duplicates"); return; }
     doImport();
   };
 
@@ -75,49 +88,41 @@ export default function Import() {
     const month = preview[0]?.date.slice(0, 7) || "";
     const additionalFromDups: Transaction[] = [];
     duplicates.forEach((dup, i) => {
-      if ((resolvedDuplicates[i] || "skip") === "replace") {
-        additionalFromDups.push(dup.incoming);
-      }
+      if ((resolvedDuplicates[i] || "skip") === "replace") additionalFromDups.push(dup.incoming);
     });
     const allNew = [...toAdd, ...additionalFromDups];
 
-    // Human-readable label for undo history
     const monthLabel = month
       ? new Date(month + "-01").toLocaleDateString("fr-FR", { month: "long", year: "numeric" })
       : "";
     const snapshotLabel = `${fileType.toUpperCase()} — ${selectedAccount}${monthLabel ? " — " + monthLabel : ""} (${allNew.length} opérations)`;
 
     importWithSnapshot(allNew, snapshotLabel, (existing) => {
-      if (fileType === "csv") {
-        return replaceMonthWithCSV(existing, allNew, month, selectedAccount);
-      } else {
-        return [...existing, ...allNew].sort((a, b) => b.date.localeCompare(a.date));
-      }
+      if (fileType === "csv") return replaceMonthWithCSV(existing, allNew, month, selectedAccount);
+      return [...existing, ...allNew].sort((a, b) => b.date.localeCompare(a.date));
     });
 
+    // Update opening balance if detected and user wants it
+    if (updateBalance && openingBalance !== null && selectedAccountObj) {
+      dispatch({
+        type: "UPDATE_ACCOUNT",
+        account: { ...selectedAccountObj, initialBalance: openingBalance },
+      });
+    }
+
     setStep("done");
-    setShowUndo(true);
   };
 
   const handleUndo = () => {
     undoLastImport();
     setStep("idle");
-    setPreview([]);
-    setDuplicates([]);
-    setToAdd([]);
-    setFileName("");
-    setShowUndo(false);
+    setPreview([]); setDuplicates([]); setToAdd([]);
+    setFileName(""); setOpeningBalance(null);
   };
 
   const month = preview[0]?.date.slice(0, 7) || "";
-
-  const formatTimestamp = (ts: number) => {
-    const d = new Date(ts);
-    return d.toLocaleDateString("fr-FR", {
-      day: "2-digit", month: "2-digit", year: "numeric",
-      hour: "2-digit", minute: "2-digit",
-    });
-  };
+  const formatTimestamp = (ts: number) =>
+    new Date(ts).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
   return (
     <Layout>
@@ -125,99 +130,53 @@ export default function Import() {
 
         <div>
           <p className="section-title">Import</p>
-          <p className="text-xs mt-1" style={{ color: "var(--text-3)" }}>
-            Importez vos relevés CSV ou PDF
-          </p>
+          <p className="text-xs mt-1" style={{ color: "var(--text-3)" }}>Importez vos relevés CSV ou PDF</p>
         </div>
 
-        {/* ── Undo last import ── */}
+        {/* Undo last import */}
         {lastImport && (
-          <div
-            className="rounded-2xl p-4 space-y-2"
-            style={{
-              background: "rgba(96,165,250,0.07)",
-              border: "1px solid rgba(96,165,250,0.2)",
-            }}
-          >
+          <div className="rounded-2xl p-4 space-y-2"
+            style={{ background: "rgba(96,165,250,0.07)", border: "1px solid rgba(96,165,250,0.2)" }}>
             <div className="flex items-start justify-between gap-2">
               <div className="flex items-start gap-2 min-w-0">
                 <Clock size={14} style={{ color: "var(--blue)", marginTop: 2, flexShrink: 0 }} />
                 <div className="min-w-0">
-                  <p className="text-xs font-semibold" style={{ color: "var(--blue)" }}>
-                    Dernier import
-                  </p>
-                  <p className="text-xs truncate mt-0.5" style={{ color: "var(--text-2)" }}>
-                    {lastImport.label}
-                  </p>
-                  <p className="text-[10px] mt-0.5" style={{ color: "var(--text-3)" }}>
-                    {formatTimestamp(lastImport.timestamp)}
-                  </p>
+                  <p className="text-xs font-semibold" style={{ color: "var(--blue)" }}>Dernier import</p>
+                  <p className="text-xs truncate mt-0.5" style={{ color: "var(--text-2)" }}>{lastImport.label}</p>
+                  <p className="text-[10px] mt-0.5" style={{ color: "var(--text-3)" }}>{formatTimestamp(lastImport.timestamp)}</p>
                 </div>
               </div>
               <button
                 onClick={() => {
-                  if (confirm(`Annuler l'import "${lastImport.label}" ?\n\nLes ${lastImport.transactionsImported.length} transactions importées seront supprimées et l'état précédent sera restauré.`)) {
+                  if (confirm(`Annuler l'import "${lastImport.label}" ?\n\nLes ${lastImport.transactionsImported.length} transactions importées seront supprimées.`)) {
                     handleUndo();
                   }
                 }}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold shrink-0 transition-all active:scale-95"
-                style={{
-                  background: "rgba(96,165,250,0.15)",
-                  color: "var(--blue)",
-                }}
-              >
-                <RotateCcw size={13} />
-                Annuler
+                style={{ background: "rgba(96,165,250,0.15)", color: "var(--blue)" }}>
+                <RotateCcw size={13} /> Annuler
               </button>
             </div>
-
-            {/* Preview of what was imported */}
-            {lastImport.transactionsImported.length > 0 && (
-              <div
-                className="rounded-xl p-3 space-y-1.5 max-h-40 overflow-y-auto"
-                style={{ background: "var(--surface-2)" }}
-              >
-                <p className="text-[10px] font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--text-3)" }}>
-                  {lastImport.transactionsImported.length} opérations importées
-                </p>
-                {lastImport.transactionsImported.slice(0, 10).map((tx) => (
-                  <div key={tx.id} className="flex items-center justify-between">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs truncate" style={{ color: "var(--text)" }}>{tx.label}</p>
-                      <p className="text-[10px]" style={{ color: "var(--text-3)" }}>
-                        {tx.date} · {tx.account}
-                      </p>
-                    </div>
-                    <span
-                      className="text-xs font-mono font-semibold ml-2 shrink-0"
-                      style={{ color: tx.amount >= 0 ? "var(--green)" : "var(--red)" }}
-                    >
-                      {tx.amount >= 0 ? "+" : ""}{formatEur(tx.amount)}
-                    </span>
-                  </div>
-                ))}
-                {lastImport.transactionsImported.length > 10 && (
-                  <p className="text-[10px] text-center pt-1" style={{ color: "var(--text-3)" }}>
-                    +{lastImport.transactionsImported.length - 10} autres
-                  </p>
-                )}
-              </div>
-            )}
           </div>
         )}
 
         {/* Account selector */}
         <div className="card space-y-2">
           <label className="label">Compte associé</label>
-          <select
-            className="input"
-            value={selectedAccount}
-            onChange={(e) => setSelectedAccount(e.target.value)}
-          >
-            {data.accounts.map((a) => (
-              <option key={a.id} value={a.name}>{a.name}</option>
-            ))}
+          <select className="input" value={selectedAccount} onChange={(e) => setSelectedAccount(e.target.value)}>
+            {data.accounts.map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
           </select>
+          {selectedAccountObj && selectedAccountObj.initialBalance === 0 && (
+            <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--amber)" }}>
+              <Info size={12} />
+              Solde initial à 0 — sera mis à jour automatiquement si détecté dans le fichier
+            </p>
+          )}
+          {selectedAccountObj && selectedAccountObj.initialBalance !== 0 && (
+            <p className="text-xs" style={{ color: "var(--text-3)" }}>
+              Solde initial : {formatEur(selectedAccountObj.initialBalance)}
+            </p>
+          )}
         </div>
 
         {/* Drop zone */}
@@ -229,58 +188,39 @@ export default function Import() {
             onDragOver={(e) => e.preventDefault()}
             onClick={() => inputRef.current?.click()}
           >
-            <input
-              ref={inputRef}
-              type="file"
-              accept=".csv,.pdf"
-              className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-            />
+            <input ref={inputRef} type="file" accept=".csv,.pdf" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
             {loading ? (
               <div className="text-center">
-                <div
-                  className="w-8 h-8 rounded-full border-2 border-t-transparent animate-spin mx-auto mb-2"
-                  style={{ borderColor: "var(--green)" }}
-                />
+                <div className="w-8 h-8 rounded-full border-2 border-t-transparent animate-spin mx-auto mb-2"
+                  style={{ borderColor: "var(--green)" }} />
                 <p className="text-sm" style={{ color: "var(--text-2)" }}>
                   {fileType === "pdf" ? "Extraction PDF en cours..." : "Analyse en cours..."}
                 </p>
               </div>
             ) : (
               <>
-                <div
-                  className="w-12 h-12 rounded-2xl flex items-center justify-center"
-                  style={{ background: "rgba(34,197,94,0.1)" }}
-                >
+                <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
+                  style={{ background: "rgba(34,197,94,0.1)" }}>
                   <Upload size={22} style={{ color: "var(--green)" }} />
                 </div>
                 <div className="text-center">
-                  <p className="font-semibold text-sm" style={{ color: "var(--text)" }}>
-                    Glisser un fichier ici
-                  </p>
-                  <p className="text-xs mt-0.5" style={{ color: "var(--text-3)" }}>
-                    ou cliquer pour sélectionner
-                  </p>
+                  <p className="font-semibold text-sm" style={{ color: "var(--text)" }}>Glisser un fichier ici</p>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--text-3)" }}>ou cliquer pour sélectionner</p>
                 </div>
                 <div className="flex gap-2">
-                  <div
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
-                    style={{ background: "rgba(34,197,94,0.1)", color: "var(--green)" }}
-                  >
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+                    style={{ background: "rgba(34,197,94,0.1)", color: "var(--green)" }}>
                     <FileSpreadsheet size={13} /> CSV
                   </div>
-                  <div
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
-                    style={{ background: "rgba(239,68,68,0.1)", color: "var(--red)" }}
-                  >
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+                    style={{ background: "rgba(239,68,68,0.1)", color: "var(--red)" }}>
                     <FileText size={13} /> PDF
                   </div>
                 </div>
               </>
             )}
-            {error && (
-              <p className="text-sm font-medium" style={{ color: "var(--red)" }}>{error}</p>
-            )}
+            {error && <p className="text-sm font-medium" style={{ color: "var(--red)" }}>{error}</p>}
           </div>
         )}
 
@@ -291,8 +231,7 @@ export default function Import() {
               <div className="flex items-center gap-3 mb-3">
                 {fileType === "pdf"
                   ? <FileText size={18} style={{ color: "var(--red)" }} />
-                  : <FileSpreadsheet size={18} style={{ color: "var(--green)" }} />
-                }
+                  : <FileSpreadsheet size={18} style={{ color: "var(--green)" }} />}
                 <div>
                   <p className="font-semibold text-sm" style={{ color: "var(--text)" }}>
                     {preview.length} transactions détectées
@@ -307,14 +246,10 @@ export default function Import() {
                   <div key={tx.id} className="flex items-center justify-between py-1">
                     <div className="min-w-0 flex-1">
                       <p className="text-xs truncate" style={{ color: "var(--text)" }}>{tx.label}</p>
-                      <p className="text-[10px]" style={{ color: "var(--text-3)" }}>
-                        {tx.date} · {tx.category}
-                      </p>
+                      <p className="text-[10px]" style={{ color: "var(--text-3)" }}>{tx.date} · {tx.category}</p>
                     </div>
-                    <span
-                      className="text-xs font-bold font-num ml-2 shrink-0"
-                      style={{ color: tx.amount >= 0 ? "var(--green)" : "var(--red)" }}
-                    >
+                    <span className="text-xs font-bold font-num ml-2 shrink-0"
+                      style={{ color: tx.amount >= 0 ? "var(--green)" : "var(--red)" }}>
                       {tx.amount >= 0 ? "+" : ""}{formatEur(tx.amount)}
                     </span>
                   </div>
@@ -327,11 +262,37 @@ export default function Import() {
               </div>
             </div>
 
+            {/* Opening balance detected */}
+            {openingBalance !== null && (
+              <div className="rounded-xl p-3 space-y-2"
+                style={{ background: "rgba(34,197,94,0.07)", border: "1px solid rgba(34,197,94,0.2)" }}>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold" style={{ color: "var(--green)" }}>
+                    ✅ Solde d'ouverture détecté : {formatEur(openingBalance)}
+                  </p>
+                  <button
+                    onClick={() => setUpdateBalance(!updateBalance)}
+                    className="px-2 py-1 rounded-lg text-[10px] font-semibold transition-all"
+                    style={{
+                      background: updateBalance ? "rgba(34,197,94,0.15)" : "var(--surface-3)",
+                      color: updateBalance ? "var(--green)" : "var(--text-3)",
+                    }}>
+                    {updateBalance ? "Appliquer ✓" : "Ignorer"}
+                  </button>
+                </div>
+                {updateBalance && selectedAccountObj && (
+                  <p className="text-xs" style={{ color: "var(--text-2)" }}>
+                    Le solde initial de <strong>{selectedAccount}</strong> passera de{" "}
+                    <strong>{formatEur(selectedAccountObj.initialBalance)}</strong> à{" "}
+                    <strong>{formatEur(openingBalance)}</strong>.
+                  </p>
+                )}
+              </div>
+            )}
+
             {fileType === "csv" && (
-              <div
-                className="rounded-xl p-3 flex items-start gap-2"
-                style={{ background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.2)" }}
-              >
+              <div className="rounded-xl p-3 flex items-start gap-2"
+                style={{ background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.2)" }}>
                 <AlertTriangle size={15} style={{ color: "var(--amber)", marginTop: 1 }} />
                 <p className="text-xs" style={{ color: "var(--amber)" }}>
                   Les transactions manuelles du mois <strong>{month}</strong> pour <strong>{selectedAccount}</strong> seront remplacées.
@@ -340,10 +301,8 @@ export default function Import() {
             )}
 
             {duplicates.length > 0 && (
-              <div
-                className="rounded-xl p-3"
-                style={{ background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.15)" }}
-              >
+              <div className="rounded-xl p-3"
+                style={{ background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.15)" }}>
                 <p className="text-xs font-semibold" style={{ color: "var(--red)" }}>
                   {duplicates.length} doublon(s) potentiel(s) détecté(s)
                 </p>
@@ -365,35 +324,23 @@ export default function Import() {
         {step === "duplicates" && (
           <div className="space-y-3 fade-up">
             <div>
-              <p className="font-semibold text-sm" style={{ color: "var(--text)" }}>
-                Résolution des doublons
-              </p>
-              <p className="text-xs mt-0.5" style={{ color: "var(--text-3)" }}>
-                Ces transactions ressemblent à des existantes
-              </p>
+              <p className="font-semibold text-sm" style={{ color: "var(--text)" }}>Résolution des doublons</p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--text-3)" }}>Ces transactions ressemblent à des existantes</p>
             </div>
             {duplicates.map((dup, i) => (
               <div key={i} className="card space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--amber)" }}>
-                  🟠 Doublon potentiel
-                </p>
+                <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--amber)" }}>🟠 Doublon potentiel</p>
                 <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded-lg p-2" style={{ background: "var(--surface-2)" }}>
-                    <p className="font-semibold mb-1" style={{ color: "var(--text-3)" }}>Existant</p>
-                    <p style={{ color: "var(--text)" }}>{dup.existing.label}</p>
-                    <p style={{ color: "var(--text-3)" }}>{dup.existing.date}</p>
-                    <p className="font-bold" style={{ color: dup.existing.amount >= 0 ? "var(--green)" : "var(--red)" }}>
-                      {formatEur(dup.existing.amount)}
-                    </p>
-                  </div>
-                  <div className="rounded-lg p-2" style={{ background: "var(--surface-2)" }}>
-                    <p className="font-semibold mb-1" style={{ color: "var(--text-3)" }}>Nouveau</p>
-                    <p style={{ color: "var(--text)" }}>{dup.incoming.label}</p>
-                    <p style={{ color: "var(--text-3)" }}>{dup.incoming.date}</p>
-                    <p className="font-bold" style={{ color: dup.incoming.amount >= 0 ? "var(--green)" : "var(--red)" }}>
-                      {formatEur(dup.incoming.amount)}
-                    </p>
-                  </div>
+                  {[{ label: "Existant", tx: dup.existing }, { label: "Nouveau", tx: dup.incoming }].map(({ label, tx }) => (
+                    <div key={label} className="rounded-lg p-2" style={{ background: "var(--surface-2)" }}>
+                      <p className="font-semibold mb-1" style={{ color: "var(--text-3)" }}>{label}</p>
+                      <p style={{ color: "var(--text)" }}>{tx.label}</p>
+                      <p style={{ color: "var(--text-3)" }}>{tx.date}</p>
+                      <p className="font-bold" style={{ color: tx.amount >= 0 ? "var(--green)" : "var(--red)" }}>
+                        {formatEur(tx.amount)}
+                      </p>
+                    </div>
+                  ))}
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   {[
@@ -401,16 +348,14 @@ export default function Import() {
                     { key: "keep", label: "Garder les 2", color: "var(--blue)" },
                     { key: "replace", label: "Remplacer", color: "var(--amber)" },
                   ].map(({ key, label, color }) => (
-                    <button
-                      key={key}
-                      onClick={() => setResolvedDuplicates((r) => ({ ...r, [i]: key as any }))}
+                    <button key={key}
+                      onClick={() => setResolvedDuplicates(r => ({ ...r, [i]: key as any }))}
                       className="py-2 rounded-lg text-xs font-semibold transition-all"
                       style={{
                         background: resolvedDuplicates[i] === key ? `${color}22` : "var(--surface-2)",
                         color: resolvedDuplicates[i] === key ? color : "var(--text-2)",
                         border: resolvedDuplicates[i] === key ? `1px solid ${color}44` : "1px solid transparent",
-                      }}
-                    >
+                      }}>
                       {label}
                     </button>
                   ))}
@@ -432,20 +377,12 @@ export default function Import() {
             </p>
             <p className="text-sm mt-1" style={{ color: "var(--text-2)" }}>
               {toAdd.length} transactions importées
+              {updateBalance && openingBalance !== null && (
+                <span> · solde initial mis à jour</span>
+              )}
             </p>
-            <p className="text-xs mt-2" style={{ color: "var(--text-3)" }}>
-              Tu peux annuler cet import depuis le bloc ci-dessus si nécessaire.
-            </p>
-            <button
-              className="btn-ghost mt-4 mx-auto"
-              onClick={() => {
-                setStep("idle");
-                setPreview([]);
-                setDuplicates([]);
-                setToAdd([]);
-                setFileName("");
-              }}
-            >
+            <button className="btn-ghost mt-4 mx-auto"
+              onClick={() => { setStep("idle"); setPreview([]); setDuplicates([]); setToAdd([]); setFileName(""); setOpeningBalance(null); }}>
               Importer un autre fichier
             </button>
           </div>
@@ -457,9 +394,9 @@ export default function Import() {
             <p className="font-semibold text-sm" style={{ color: "var(--text)" }}>💡 Conseils</p>
             {[
               "Vérifiez toujours le compte sélectionné avant de valider",
-              "CSV : remplace les transactions manuelles du même mois",
-              "PDF : ajoute sans remplacer les transactions existantes",
-              "En cas d'erreur, utilisez le bouton Annuler en haut de cette page",
+              "Le solde d'ouverture est détecté automatiquement depuis le relevé",
+              "PDF : utilisez le relevé officiel numérique (pas un scan)",
+              "En cas d'erreur, utilisez le bouton Annuler en haut",
             ].map((tip, i) => (
               <p key={i} className="text-xs" style={{ color: "var(--text-3)" }}>• {tip}</p>
             ))}
