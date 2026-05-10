@@ -2,7 +2,10 @@
 import React, { useState, useMemo } from "react";
 import Layout from "@/components/Layout";
 import { useApp } from "@/context/AppContext";
-import { Transaction, DEFAULT_CATEGORIES, generateId, isTransferCategory, TRANSFER_CATEGORIES } from "@/lib/store";
+import {
+  Transaction, DEFAULT_CATEGORIES, generateId,
+  isTransferCategory, TRANSFER_CATEGORIES,
+} from "@/lib/store";
 import { formatEur, autoCategory } from "@/lib/analytics";
 import { Plus, Search, X, Edit2, Trash2, Check, ArrowLeftRight } from "lucide-react";
 
@@ -12,22 +15,21 @@ const EMPTY_FORM = {
   amount: "",
   category: "Autre",
   account: "",
+  toAccount: "",  // destination for internal transfers
   type: "expense" as "income" | "expense" | "transfer",
 };
 
-// Non-transfer categories only (for income/expense form)
 const EXPENSE_INCOME_CATEGORIES = DEFAULT_CATEGORIES.filter(
   (c) => !TRANSFER_CATEGORIES.includes(c)
 );
 
 export default function Transactions() {
-  const { data, addTransaction, updateTransaction, deleteTransaction } = useApp();
+  const { data, addTransaction, updateTransaction, deleteTransaction, dispatch } = useApp();
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [search, setSearch] = useState("");
   const [filterAccount, setFilterAccount] = useState("all");
-  const [filterCategory, setFilterCategory] = useState("all");
   const [filterType, setFilterType] = useState("all");
 
   const accountNames = useMemo(() => data.accounts.map((a) => a.name), [data.accounts]);
@@ -38,7 +40,6 @@ export default function Transactions() {
       ...f,
       label,
       category: cat !== "Autre" ? cat : f.category,
-      // Auto-detect transfer type
       type: TRANSFER_CATEGORIES.includes(cat) ? "transfer" : f.type,
     }));
   };
@@ -47,29 +48,54 @@ export default function Transactions() {
     setForm((f) => ({
       ...f,
       category,
-      // Auto-switch type when selecting a transfer category
-      type: TRANSFER_CATEGORIES.includes(category) ? "transfer" : f.type === "transfer" ? "expense" : f.type,
+      type: TRANSFER_CATEGORIES.includes(category)
+        ? "transfer"
+        : f.type === "transfer" ? "expense" : f.type,
     }));
   };
 
   const handleSubmit = () => {
     if (!form.label || !form.amount || !form.account) return;
+    const absAmount = Math.abs(parseFloat(form.amount));
 
-    let amount: number;
     if (form.type === "transfer") {
-      // Transfers are negative (money leaving the account)
-      amount = -Math.abs(parseFloat(form.amount));
-    } else if (form.type === "expense") {
-      amount = -Math.abs(parseFloat(form.amount));
-    } else {
-      amount = Math.abs(parseFloat(form.amount));
-    }
+      // ── Internal transfer: create TWO transactions ──
+      const now = Date.now();
+      const label = form.toAccount
+        ? `${form.label} → ${shortName(form.toAccount)}`
+        : form.label;
+      const labelTo = form.toAccount
+        ? `${form.label} ← ${shortName(form.account)}`
+        : form.label;
 
-    if (editId) {
+      // Debit on source account
+      addTransaction({
+        date: form.date,
+        label,
+        amount: -absAmount,
+        category: form.category,
+        account: form.account,
+        source: "manual",
+      });
+
+      // Credit on destination account (if selected)
+      if (form.toAccount && form.toAccount !== form.account) {
+        addTransaction({
+          date: form.date,
+          label: labelTo,
+          amount: absAmount,
+          category: form.category,
+          account: form.toAccount,
+          source: "manual",
+        });
+      }
+    } else if (editId) {
       const existing = data.transactions.find((t) => t.id === editId)!;
+      const amount = form.type === "expense" ? -absAmount : absAmount;
       updateTransaction({ ...existing, ...form, amount });
       setEditId(null);
     } else {
+      const amount = form.type === "expense" ? -absAmount : absAmount;
       addTransaction({
         date: form.date,
         label: form.label,
@@ -79,6 +105,7 @@ export default function Transactions() {
         source: "manual",
       });
     }
+
     setForm({ ...EMPTY_FORM, account: form.account });
     setShowForm(false);
   };
@@ -91,6 +118,7 @@ export default function Transactions() {
       amount: Math.abs(tx.amount).toString(),
       category: tx.category,
       account: tx.account,
+      toAccount: "",
       type: isTransfer ? "transfer" : tx.amount >= 0 ? "income" : "expense",
     });
     setEditId(tx.id);
@@ -100,27 +128,22 @@ export default function Transactions() {
   const filtered = useMemo(() => {
     return data.transactions.filter((t) => {
       if (filterAccount !== "all" && t.account !== filterAccount) return false;
-      if (filterCategory !== "all" && t.category !== filterCategory) return false;
       if (filterType === "income" && (t.amount < 0 || isTransferCategory(t.category))) return false;
       if (filterType === "expense" && (t.amount > 0 || isTransferCategory(t.category))) return false;
       if (filterType === "transfer" && !isTransferCategory(t.category)) return false;
       if (search && !t.label.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
-  }, [data.transactions, filterAccount, filterCategory, filterType, search]);
+  }, [data.transactions, filterAccount, filterType, search]);
 
-  // Counts for filter badges
   const counts = useMemo(() => ({
-    income: data.transactions.filter(t => t.amount > 0 && !isTransferCategory(t.category)).length,
-    expense: data.transactions.filter(t => t.amount < 0 && !isTransferCategory(t.category)).length,
+    income:   data.transactions.filter(t => t.amount > 0 && !isTransferCategory(t.category)).length,
+    expense:  data.transactions.filter(t => t.amount < 0 && !isTransferCategory(t.category)).length,
     transfer: data.transactions.filter(t => isTransferCategory(t.category)).length,
   }), [data.transactions]);
 
-  // Categories for filter (grouped)
-  const allCategories = useMemo(() => {
-    const used = new Set(data.transactions.map(t => t.category));
-    return Array.from(used).sort();
-  }, [data.transactions]);
+  // Accounts available as destination (exclude source)
+  const toAccounts = accountNames.filter(a => a !== form.account);
 
   return (
     <Layout>
@@ -134,127 +157,170 @@ export default function Transactions() {
               {filtered.length} transaction{filtered.length > 1 ? "s" : ""}
             </p>
           </div>
-          <button
-            className="btn-primary"
-            onClick={() => { setEditId(null); setForm(EMPTY_FORM); setShowForm(!showForm); }}
-          >
+          <button className="btn-primary"
+            onClick={() => { setEditId(null); setForm(EMPTY_FORM); setShowForm(!showForm); }}>
             <Plus size={16} /> Ajouter
           </button>
         </div>
 
-        {/* Add / Edit Form */}
+        {/* Form */}
         {showForm && (
           <div className="card fade-up space-y-3">
             <p className="font-semibold text-sm" style={{ color: "var(--text)" }}>
               {editId ? "Modifier" : "Nouvelle transaction"}
             </p>
 
-            {/* Type toggle — 3 options */}
+            {/* Type toggle */}
             <div className="grid grid-cols-3 gap-2">
               {([
-                { id: "expense",  label: "💸 Dépense",     color: "var(--red)" },
-                { id: "income",   label: "💰 Revenu",      color: "var(--green)" },
-                { id: "transfer", label: "↔️ Virement",   color: "var(--blue)" },
+                { id: "expense",  label: "💸 Dépense",  color: "var(--red)" },
+                { id: "income",   label: "💰 Revenu",   color: "var(--green)" },
+                { id: "transfer", label: "↔️ Virement", color: "var(--blue)" },
               ] as const).map(({ id, label, color }) => (
-                <button
-                  key={id}
-                  onClick={() => {
-                    setForm((f) => ({
-                      ...f,
-                      type: id,
-                      // Auto-switch category when toggling to/from transfer
-                      category: id === "transfer"
-                        ? "Virement interne"
-                        : isTransferCategory(f.category) ? "Autre" : f.category,
-                    }));
-                  }}
+                <button key={id}
+                  onClick={() => setForm((f) => ({
+                    ...f, type: id,
+                    category: id === "transfer"
+                      ? "Virement interne"
+                      : isTransferCategory(f.category) ? "Autre" : f.category,
+                    toAccount: id !== "transfer" ? "" : f.toAccount,
+                  }))}
                   className="py-2 rounded-xl text-xs font-semibold transition-all"
                   style={{
                     background: form.type === id ? `${color}20` : "var(--surface-2)",
                     color: form.type === id ? color : "var(--text-3)",
                     border: form.type === id ? `1px solid ${color}50` : "1px solid transparent",
-                  }}
-                >
+                  }}>
                   {label}
                 </button>
               ))}
             </div>
 
-            {/* Transfer info banner */}
-            {form.type === "transfer" && (
-              <div
-                className="rounded-xl px-3 py-2 text-xs flex items-center gap-2"
-                style={{ background: "rgba(96,165,250,0.08)", color: "var(--blue)" }}
-              >
-                <ArrowLeftRight size={13} />
-                Ce montant ne comptera pas comme une dépense dans tes stats.
-              </div>
+            {/* Transfer: from → to */}
+            {form.type === "transfer" ? (
+              <>
+                <div
+                  className="rounded-xl px-3 py-2 text-xs flex items-center gap-2"
+                  style={{ background: "rgba(96,165,250,0.08)", color: "var(--blue)" }}
+                >
+                  <ArrowLeftRight size={13} />
+                  Ce montant ne comptera pas comme une dépense dans tes stats.
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label">Date</label>
+                    <input type="date" className="input" value={form.date}
+                      onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="label">Montant (€)</label>
+                    <input type="number" className="input" placeholder="0.00" value={form.amount}
+                      onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+                      min="0" step="0.01" />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="label">Libellé</label>
+                  <input type="text" className="input"
+                    placeholder="ex: Épargne PEA, Virement joint..."
+                    value={form.label}
+                    onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))} />
+                </div>
+
+                {/* From → To avec flèche visuelle */}
+                <div>
+                  <label className="label">Compte source → destination</label>
+                  <div className="flex items-center gap-2">
+                    <select className="input flex-1" value={form.account}
+                      onChange={(e) => setForm((f) => ({ ...f, account: e.target.value, toAccount: "" }))}>
+                      <option value="">Compte source</option>
+                      {accountNames.map((a) => <option key={a} value={a}>{shortName(a)}</option>)}
+                    </select>
+                    <div className="shrink-0 text-lg" style={{ color: "var(--blue)" }}>→</div>
+                    <select className="input flex-1" value={form.toAccount}
+                      onChange={(e) => setForm((f) => ({ ...f, toAccount: e.target.value }))}>
+                      <option value="">Compte destination</option>
+                      {toAccounts.map((a) => <option key={a} value={a}>{shortName(a)}</option>)}
+                    </select>
+                  </div>
+                  {form.account && form.toAccount && (
+                    <p className="text-[10px] mt-1.5 px-1" style={{ color: "var(--text-3)" }}>
+                      ✅ Créera 2 transactions : débit sur <strong>{shortName(form.account)}</strong> et crédit sur <strong>{shortName(form.toAccount)}</strong>
+                    </p>
+                  )}
+                  {form.account && !form.toAccount && (
+                    <p className="text-[10px] mt-1.5 px-1" style={{ color: "var(--text-3)" }}>
+                      Sans destination = 1 seule transaction (virement externe ou épargne hors-app)
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="label">Catégorie</label>
+                  <select className="input" value={form.category}
+                    onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}>
+                    {TRANSFER_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              </>
+            ) : (
+              /* Normal expense/income form */
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label">Date</label>
+                    <input type="date" className="input" value={form.date}
+                      onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="label">Montant (€)</label>
+                    <input type="number" className="input" placeholder="0.00" value={form.amount}
+                      onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+                      min="0" step="0.01" />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="label">Libellé</label>
+                  <input type="text" className="input" placeholder="ex: Carrefour courses"
+                    value={form.label}
+                    onChange={(e) => handleLabelChange(e.target.value)} />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label">Catégorie</label>
+                    <select className="input" value={form.category}
+                      onChange={(e) => handleCategoryChange(e.target.value)}>
+                      <optgroup label="Dépenses / Revenus">
+                        {EXPENSE_INCOME_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </optgroup>
+                      <optgroup label="Virements internes">
+                        {TRANSFER_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </optgroup>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Compte</label>
+                    <select className="input" value={form.account}
+                      onChange={(e) => setForm((f) => ({ ...f, account: e.target.value }))}>
+                      <option value="">Sélectionner</option>
+                      {accountNames.map((a) => <option key={a} value={a}>{shortName(a)}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="label">Date</label>
-                <input type="date" className="input" value={form.date}
-                  onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
-              </div>
-              <div>
-                <label className="label">Montant (€)</label>
-                <input type="number" className="input" placeholder="0.00" value={form.amount}
-                  onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-                  min="0" step="0.01" />
-              </div>
-            </div>
-
-            <div>
-              <label className="label">Libellé</label>
-              <input type="text" className="input" placeholder="ex: Virement PEA Fortuneo"
-                value={form.label} onChange={(e) => handleLabelChange(e.target.value)} />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="label">Catégorie</label>
-                <select className="input" value={form.category}
-                  onChange={(e) => handleCategoryChange(e.target.value)}>
-                  {form.type === "transfer" ? (
-                    <>
-                      <optgroup label="Virements internes">
-                        {TRANSFER_CATEGORIES.map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </optgroup>
-                    </>
-                  ) : (
-                    <>
-                      <optgroup label="Dépenses / Revenus">
-                        {EXPENSE_INCOME_CATEGORIES.map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="Virements internes">
-                        {TRANSFER_CATEGORIES.map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </optgroup>
-                    </>
-                  )}
-                </select>
-              </div>
-              <div>
-                <label className="label">Compte</label>
-                <select className="input" value={form.account}
-                  onChange={(e) => setForm((f) => ({ ...f, account: e.target.value }))}>
-                  <option value="">Sélectionner</option>
-                  {accountNames.map((a) => <option key={a} value={a}>{a}</option>)}
-                </select>
-              </div>
-            </div>
-
             <div className="flex gap-2">
-              <button className="btn-primary flex-1" onClick={handleSubmit}>
+              <button className="btn-primary flex-1" onClick={handleSubmit}
+                disabled={!form.label || !form.amount || !form.account}>
                 <Check size={15} /> {editId ? "Modifier" : "Ajouter"}
               </button>
-              <button className="btn-ghost px-3" onClick={() => { setShowForm(false); setEditId(null); }}>
+              <button className="btn-ghost px-3"
+                onClick={() => { setShowForm(false); setEditId(null); }}>
                 <X size={15} />
               </button>
             </div>
@@ -263,12 +329,13 @@ export default function Transactions() {
 
         {/* Search */}
         <div className="relative">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "var(--text-3)" }} />
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2"
+            style={{ color: "var(--text-3)" }} />
           <input type="text" className="input pl-9" placeholder="Rechercher..."
             value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
 
-        {/* Type filters */}
+        {/* Filters */}
         <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
           {[
             { key: "all",      label: "Tous" },
@@ -292,11 +359,11 @@ export default function Transactions() {
             onChange={(e) => setFilterAccount(e.target.value)}
           >
             <option value="all">Tous comptes</option>
-            {accountNames.map((a) => <option key={a} value={a}>{a}</option>)}
+            {accountNames.map((a) => <option key={a} value={a}>{shortName(a)}</option>)}
           </select>
         </div>
 
-        {/* Transaction list */}
+        {/* List */}
         <div className="space-y-2 pb-4">
           {filtered.length === 0 ? (
             <div className="text-center py-12" style={{ color: "var(--text-3)" }}>
@@ -307,14 +374,22 @@ export default function Transactions() {
             filtered.map((tx) => (
               <TxRow key={tx.id} tx={tx}
                 onEdit={() => startEdit(tx)}
-                onDelete={() => deleteTransaction(tx.id)}
-              />
+                onDelete={() => deleteTransaction(tx.id)} />
             ))
           )}
         </div>
       </div>
     </Layout>
   );
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function shortName(name: string): string {
+  const words = name.trim().split(/\s+/);
+  if (words.length === 1) return words[0].slice(0, 14);
+  const two = words.slice(0, 2).join(" ");
+  return two.length > 16 ? words[0].slice(0, 14) : two;
 }
 
 function TxRow({ tx, onEdit, onDelete }: {
@@ -328,8 +403,7 @@ function TxRow({ tx, onEdit, onDelete }: {
   const bgColor = isTransfer
     ? "rgba(96,165,250,0.1)"
     : isIncome ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)";
-  const amtColor = isTransfer
-    ? "var(--blue)"
+  const amtColor = isTransfer ? "var(--blue)"
     : isIncome ? "var(--green)" : "var(--red)";
 
   return (
@@ -345,12 +419,12 @@ function TxRow({ tx, onEdit, onDelete }: {
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium truncate" style={{ color: "var(--text)" }}>{tx.label}</p>
         <p className="text-xs" style={{ color: "var(--text-3)" }}>
-          {tx.date} · {tx.category} · {tx.account.split(" ").slice(-1)[0]}
+          {tx.date} · {tx.category} · {shortName(tx.account)}
         </p>
       </div>
       <div className="text-right shrink-0">
         <p className="text-sm font-bold font-num" style={{ color: amtColor }}>
-          {isIncome ? "+" : isTransfer ? "" : ""}{formatEur(tx.amount)}
+          {isIncome ? "+" : ""}{formatEur(tx.amount)}
         </p>
         <span className="text-[10px] px-1.5 py-0.5 rounded-full"
           style={{ background: "var(--surface-2)", color: "var(--text-3)" }}>
@@ -359,12 +433,12 @@ function TxRow({ tx, onEdit, onDelete }: {
       </div>
       {showActions && (
         <div className="flex gap-1 ml-1">
-          <button className="p-1.5 rounded-lg transition-colors"
+          <button className="p-1.5 rounded-lg"
             style={{ background: "var(--surface-2)", color: "var(--blue)" }}
             onClick={(e) => { e.stopPropagation(); onEdit(); setShowActions(false); }}>
             <Edit2 size={13} />
           </button>
-          <button className="p-1.5 rounded-lg transition-colors"
+          <button className="p-1.5 rounded-lg"
             style={{ background: "rgba(239,68,68,0.1)", color: "var(--red)" }}
             onClick={(e) => {
               e.stopPropagation();
